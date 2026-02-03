@@ -9,6 +9,6 @@ pub mod indexer;
 pub mod api;
 pub mod config;
 
-pub use indexer::{HayateIndexer, Network, NetworkStorage, ChainTip};
+pub use indexer::{HayateIndexer, Network, NetworkStorage, ChainTip, BlockProcessor, BlockStats};
 pub use config::HayateConfig;
 pub use chain_sync::{HayateSync, NodeConnection};

@@ -11,7 +11,7 @@ use tokio::sync::RwLock;
 use anyhow::Result;
 
 #[allow(unused_imports)]
-pub use block_processor::{BlockProcessor, WalletFilter};
+pub use block_processor::{BlockProcessor, WalletFilter, BlockStats};
 
 // Import RewardsTracker from the rewards module
 use crate::rewards::RewardsTracker;
