@@ -171,7 +171,9 @@ impl HayateConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+    use std::fs;
+    use tempfile::TempDir;
+
     #[test]
     fn test_default_config() {
         let config = HayateConfig::default();
@@ -181,7 +183,7 @@ mod tests {
         assert!(config.networks.contains_key("preview"));
         assert!(config.networks.contains_key("sanchonet"));
     }
-    
+
     #[test]
     fn test_custom_network() {
         let mut config = HayateConfig::default();
@@ -191,8 +193,126 @@ mod tests {
             42,
             Some(PathBuf::from("./genesis.json")),
         );
-        
+
         assert!(config.networks.contains_key("my-testnet"));
         assert_eq!(config.networks["my-testnet"].magic, 42);
+    }
+
+    #[test]
+    fn test_save_and_load_config() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("test_config.toml");
+
+        // Create and save a config
+        let mut config = HayateConfig::default();
+        config.gap_limit = 42;
+        config.data_dir = PathBuf::from("/custom/path");
+        config.save(config_path.to_str().unwrap()).unwrap();
+
+        // Load it back
+        let loaded = HayateConfig::load(config_path.to_str().unwrap()).unwrap();
+        assert_eq!(loaded.gap_limit, 42);
+        assert_eq!(loaded.data_dir, PathBuf::from("/custom/path"));
+        assert_eq!(loaded.api.bind, config.api.bind);
+    }
+
+    #[test]
+    fn test_load_nonexistent_file() {
+        let result = HayateConfig::load("/nonexistent/path/config.toml");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_invalid_toml() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("invalid.toml");
+
+        // Write invalid TOML
+        fs::write(&config_path, "this is { not [ valid toml").unwrap();
+
+        let result = HayateConfig::load(config_path.to_str().unwrap());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_partial_config() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("partial.toml");
+
+        // Write minimal valid TOML (should use defaults for missing fields)
+        fs::write(&config_path, r#"
+gap_limit = 50
+
+[api]
+bind = "0.0.0.0:9090"
+"#).unwrap();
+
+        let loaded = HayateConfig::load(config_path.to_str().unwrap()).unwrap();
+        assert_eq!(loaded.gap_limit, 50);
+        assert_eq!(loaded.api.bind, "0.0.0.0:9090");
+        // Partial config without networks section will have empty networks
+        assert_eq!(loaded.networks.len(), 0);
+        // Data dir should use default
+        assert_eq!(loaded.data_dir, PathBuf::from("./hayate-db"));
+    }
+
+    #[test]
+    fn test_generate_default_config() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = temp_dir.path().join("generated.toml");
+
+        HayateConfig::generate_default(config_path.to_str().unwrap()).unwrap();
+
+        // Verify file was created and is valid
+        assert!(config_path.exists());
+        let loaded = HayateConfig::load(config_path.to_str().unwrap()).unwrap();
+        assert_eq!(loaded.gap_limit, 20);
+    }
+
+    #[test]
+    fn test_network_config_relay_formats() {
+        let config = HayateConfig::default();
+
+        // Mainnet should have valid relay
+        let mainnet = &config.networks["mainnet"];
+        assert!(mainnet.relay.contains(":"));
+        assert!(mainnet.relay.contains("relays-new.cardano-mainnet.iohk.io")
+             || mainnet.relay.contains("backbone.cardano.iog.io")
+             || mainnet.relay.starts_with("localhost"));
+
+        // Magic numbers should be correct
+        assert_eq!(mainnet.magic, 764824073);
+        assert_eq!(config.networks["preprod"].magic, 1);
+        assert_eq!(config.networks["preview"].magic, 2);
+        assert_eq!(config.networks["sanchonet"].magic, 4);
+    }
+
+    #[test]
+    fn test_all_default_networks_present() {
+        let config = HayateConfig::default();
+        let networks: Vec<&str> = config.networks.keys().map(|s| s.as_str()).collect();
+
+        assert!(networks.contains(&"mainnet"));
+        assert!(networks.contains(&"preprod"));
+        assert!(networks.contains(&"preview"));
+        assert!(networks.contains(&"sanchonet"));
+    }
+
+    #[test]
+    fn test_api_config_defaults() {
+        let config = HayateConfig::default();
+
+        // API should bind to localhost by default
+        assert!(config.api.bind.starts_with("127.0.0.1")
+             || config.api.bind.starts_with("0.0.0.0"));
+        assert!(config.api.bind.contains(":"));
+    }
+
+    #[test]
+    fn test_data_dir_default() {
+        let config = HayateConfig::default();
+
+        // Should have a default data directory
+        assert!(!config.data_dir.as_os_str().is_empty());
     }
 }
