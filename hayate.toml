@@ -1,0 +1,49 @@
+# Hayate Configuration
+# 疾風 - Swift Cardano Indexer
+
+data_dir = "./hayate-db"
+gap_limit = 20  # BIP44 gap limit for address discovery
+
+[api]
+enabled = true
+bind = "127.0.0.1:50051"  # UTxORPC standard port
+
+# ===== Standard Networks =====
+
+[networks.mainnet]
+enabled = false
+relay = "relays-new.cardano-mainnet.iohk.io:3001"
+magic = 764824073
+
+[networks.preprod]
+enabled = true
+relay = "preprod-node.world.dev.cardano.org:30000"
+magic = 1
+
+[networks.preview]
+enabled = false
+relay = "preview-node.world.dev.cardano.org:30002"
+magic = 2
+
+[networks.sanchonet]
+enabled = false
+relay = "sanchonet-node.world.dev.cardano.org:30004"
+magic = 4
+# SanchoNet - Governance testnet for Mike! 🎉
+
+# ===== Custom Networks =====
+
+# Example: Your own private testnet
+# [networks.my-testnet]
+# enabled = false
+# relay = "localhost:3001"
+# magic = 42
+# genesis_file = "./networks/my-testnet/genesis.json"
+# start_point = [0, "genesis_hash_here"]
+
+# Example: Local development network
+# [networks.local]
+# enabled = false
+# relay = "127.0.0.1:3001"
+# magic = 1234
+# genesis_file = "./networks/local/genesis.json"

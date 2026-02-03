@@ -1,0 +1,27 @@
+/target
+/Cargo.lock
+**/*.rs.bk
+*.pdb
+
+# Database
+/hayate-db/
+*.db
+
+# Nix
+result
+result-*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.direnv/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

@@ -1,0 +1,73 @@
+// UTxORPC Query Service
+// Simplified version based on UTxORPC spec
+
+syntax = "proto3";
+
+package utxorpc.query.v1;
+
+service QueryService {
+  // Get UTxOs by address
+  rpc ReadUtxos(ReadUtxosRequest) returns (ReadUtxosResponse);
+  
+  // Search UTxOs by pattern
+  rpc SearchUtxos(SearchUtxosRequest) returns (SearchUtxosResponse);
+  
+  // Get chain parameters
+  rpc ReadParams(ReadParamsRequest) returns (ReadParamsResponse);
+  
+  // Get chain tip
+  rpc GetChainTip(GetChainTipRequest) returns (GetChainTipResponse);
+}
+
+message ReadUtxosRequest {
+  repeated bytes addresses = 1;  // Cardano addresses (raw bytes)
+}
+
+message ReadUtxosResponse {
+  repeated Utxo items = 1;
+  bytes ledger_tip = 2;  // Current chain tip
+}
+
+message SearchUtxosRequest {
+  string pattern = 1;  // Search pattern (e.g., address prefix)
+}
+
+message SearchUtxosResponse {
+  repeated Utxo items = 1;
+}
+
+message ReadParamsRequest {
+  // Empty for now
+}
+
+message ReadParamsResponse {
+  uint64 slot = 1;
+  bytes hash = 2;
+  // Add protocol parameters as needed
+}
+
+message GetChainTipRequest {
+  // Empty
+}
+
+message GetChainTipResponse {
+  uint64 height = 1;
+  uint64 slot = 2;
+  bytes hash = 3;
+}
+
+message Utxo {
+  bytes tx_hash = 1;
+  uint32 output_index = 2;
+  bytes address = 3;
+  uint64 amount = 4;  // Lovelace
+  repeated Asset assets = 5;
+  bytes datum_hash = 6;
+  bytes datum = 7;
+}
+
+message Asset {
+  bytes policy_id = 1;
+  bytes asset_name = 2;
+  uint64 amount = 3;
+}
