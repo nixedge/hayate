@@ -11,3 +11,4 @@ pub mod config;
 
 pub use indexer::{HayateIndexer, Network, NetworkStorage, ChainTip};
 pub use config::HayateConfig;
+pub use chain_sync::{HayateSync, NodeConnection};

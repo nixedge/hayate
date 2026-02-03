@@ -61,18 +61,23 @@ impl Default for ApiConfig {
 pub struct NetworkConfig {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
-    
-    /// Node-to-client connection (host:port)
+
+    /// Node-to-client connection (host:port or unix socket path)
+    /// Examples: "localhost:3001" or "/path/to/node.socket"
     pub relay: String,
-    
+
     /// Network magic number
     pub magic: u64,
-    
+
     /// Optional: Path to genesis file for custom networks
     pub genesis_file: Option<PathBuf>,
-    
+
     /// Optional: Starting point (slot, hash) for sync
     pub start_point: Option<(u64, String)>,
+
+    /// Optional: Unix socket path (alternative to relay)
+    /// When set, this takes precedence over relay field
+    pub socket_path: Option<PathBuf>,
 }
 
 fn default_enabled() -> bool {
@@ -90,8 +95,9 @@ impl Default for HayateConfig {
             magic: 764824073,
             genesis_file: None,
             start_point: None,
+            socket_path: None,
         });
-        
+
         // Preprod
         networks.insert("preprod".to_string(), NetworkConfig {
             enabled: true,
@@ -99,8 +105,9 @@ impl Default for HayateConfig {
             magic: 1,
             genesis_file: None,
             start_point: None,
+            socket_path: None,
         });
-        
+
         // Preview
         networks.insert("preview".to_string(), NetworkConfig {
             enabled: false,
@@ -108,8 +115,9 @@ impl Default for HayateConfig {
             magic: 2,
             genesis_file: None,
             start_point: None,
+            socket_path: None,
         });
-        
+
         // SanchoNet - for Mike! 🎉
         networks.insert("sanchonet".to_string(), NetworkConfig {
             enabled: false,
@@ -117,6 +125,7 @@ impl Default for HayateConfig {
             magic: 4,
             genesis_file: None,
             start_point: None,
+            socket_path: None,
         });
         
         Self {
@@ -164,6 +173,7 @@ impl HayateConfig {
             magic,
             genesis_file,
             start_point: None,
+            socket_path: None,
         });
     }
 }
