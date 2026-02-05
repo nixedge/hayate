@@ -4,13 +4,15 @@
 #![allow(dead_code)]
 
 use pallas_crypto::key::ed25519::{SecretKey, PublicKey, SecretKeyExtended};
+use pallas_crypto::hash::Hash;
 use pallas_addresses::{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart};
 use pallas_traverse::ComputeHash;
 use cryptoxide::{hmac::Hmac, pbkdf2::pbkdf2, sha2::Sha512};
 use minicbor::{Encode, Encoder, encode};
 use bip39::rand_core::OsRng;
 use bip39::Mnemonic;
-use ed25519_bip32::{XPrv, XPRV_SIZE};
+use ed25519_bip32::{XPrv, XPub, XPRV_SIZE, XPUB_SIZE};
+use anyhow::{Result, Context};
 
 /// Flexible secret key wrapper for both standard and extended keys
 #[derive(Debug)]
@@ -141,14 +143,109 @@ pub fn generate_key_pair_from_hex(sk_hex: &str) -> KeyPairAndAddress {
         .expect("Secret key must be exactly 32 bytes");
     let sk = SecretKey::from(skey_array);
     let vk = sk.public_key();
-    
+
     let addr = ShelleyAddress::new(
         Network::Mainnet,
         ShelleyPaymentPart::key_hash(vk.compute_hash()),
         ShelleyDelegationPart::Null,
     );
-    
+
     (FlexibleSecretKey::Standard(sk), vk, addr)
+}
+
+// ===== Account XPub Operations (Public Key Only) =====
+
+/// Wallet account public keys derived from an xpub
+#[derive(Debug, Clone)]
+pub struct WalletAccount {
+    pub account_xpub: XPub,
+    pub payment_keys: Vec<(PublicKey, Hash<28>)>,  // (pubkey, key_hash)
+    pub stake_key: (PublicKey, Hash<28>),           // (pubkey, key_hash)
+}
+
+/// Parse an account xpub from hex or bech32
+/// Supports:
+/// - Hex format: 64 bytes hex (128 hex chars)
+/// - Bech32 format: acct_xvk1... or acct_xsk1...
+pub fn parse_account_xpub(xpub_str: &str) -> Result<XPub> {
+    let xpub_bytes = if xpub_str.starts_with("acct_xvk") || xpub_str.starts_with("acct_xsk") {
+        // Bech32 format
+        use bech32::primitives::decode::UncheckedHrpstring;
+
+        let unchecked = UncheckedHrpstring::new(xpub_str)
+            .context("Invalid bech32 string format")?;
+
+        let checked = unchecked.validate_and_remove_checksum::<bech32::Bech32>()
+            .context("Invalid bech32 checksum")?;
+
+        // Convert Fe32 to bytes
+        let mut bytes = Vec::new();
+        let data_fe32 = checked.byte_iter();
+
+        for fe in data_fe32 {
+            bytes.push(u8::from(fe));
+        }
+
+        bytes
+    } else {
+        // Hex format
+        hex::decode(xpub_str)
+            .context("Invalid hex encoding")?
+    };
+
+    if xpub_bytes.len() != XPUB_SIZE {
+        anyhow::bail!("Invalid xpub length: expected {} bytes, got {}", XPUB_SIZE, xpub_bytes.len());
+    }
+
+    let xpub_array: [u8; XPUB_SIZE] = xpub_bytes
+        .try_into()
+        .expect("Length already checked");
+
+    Ok(XPub::from_bytes(xpub_array))
+}
+
+/// Derive wallet account keys from an account xpub
+/// This derives payment keys (0/0..gap_limit) and the stake key (2/0)
+pub fn derive_account_keys(account_xpub: XPub, gap_limit: u32) -> Result<WalletAccount> {
+    // Derive stake key: account'/2/0
+    let stake_chain_xpub = account_xpub.derive(ed25519_bip32::DerivationScheme::V2, 2)?;
+    let stake_xpub = stake_chain_xpub.derive(ed25519_bip32::DerivationScheme::V2, 0)?;
+
+    let stake_pubkey_bytes = stake_xpub.public_key();
+    let stake_pubkey = PublicKey::from(<[u8; 32]>::try_from(stake_pubkey_bytes)
+        .context("Invalid stake public key length")?);
+    let stake_key_hash = stake_pubkey.compute_hash();
+
+    // Derive payment keys: account'/0/0..gap_limit
+    let mut payment_keys = Vec::new();
+    let payment_chain_xpub = account_xpub.derive(ed25519_bip32::DerivationScheme::V2, 0)?;
+
+    for index in 0..gap_limit {
+        let payment_xpub = payment_chain_xpub.derive(ed25519_bip32::DerivationScheme::V2, index)?;
+        let payment_pubkey_bytes = payment_xpub.public_key();
+        let payment_pubkey = PublicKey::from(<[u8; 32]>::try_from(payment_pubkey_bytes)
+            .context("Invalid payment public key length")?);
+        let payment_key_hash = payment_pubkey.compute_hash();
+
+        payment_keys.push((payment_pubkey, payment_key_hash));
+    }
+
+    Ok(WalletAccount {
+        account_xpub,
+        payment_keys,
+        stake_key: (stake_pubkey, stake_key_hash),
+    })
+}
+
+/// Get key hashes for wallet filtering
+/// Returns (payment_key_hashes, stake_key_hash)
+pub fn get_wallet_key_hashes(account: &WalletAccount) -> (Vec<Hash<28>>, Hash<28>) {
+    let payment_hashes: Vec<Hash<28>> = account.payment_keys
+        .iter()
+        .map(|(_, hash)| *hash)
+        .collect();
+
+    (payment_hashes, account.stake_key.1)
 }
 
 // ===== CIP-8 Message Signing =====
@@ -283,10 +380,99 @@ mod tests {
     fn test_cip8_signing() {
         let kp = generate_cardano_key_and_address();
         let (signed_msg, pubkey) = cip8_sign(&kp, "test message");
-        
+
         // Should produce hex-encoded signed message and pubkey
         assert!(!signed_msg.is_empty());
         assert!(!pubkey.is_empty());
         assert_eq!(pubkey.len(), 64); // 32 bytes = 64 hex chars
+    }
+
+    #[test]
+    fn test_parse_account_xpub() {
+        // Generate a valid xpub from a mnemonic
+        let mnemonic = "test walk nut penalty hip pave soap entry language right filter choice";
+        let bip39 = Mnemonic::parse(mnemonic).unwrap();
+        let entropy = bip39.to_entropy();
+
+        let mut pbkdf2_result = [0; XPRV_SIZE];
+        let mut mac = Hmac::new(Sha512::new(), "".as_bytes());
+        pbkdf2(&mut mac, &entropy, 4096, &mut pbkdf2_result);
+        let xprv = XPrv::normalize_bytes_force3rd(pbkdf2_result);
+
+        // Derive to account level: m/1852'/1815'/0'
+        let account_xprv = xprv
+            .derive(ed25519_bip32::DerivationScheme::V2, harden_index(1852))
+            .derive(ed25519_bip32::DerivationScheme::V2, harden_index(1815))
+            .derive(ed25519_bip32::DerivationScheme::V2, harden_index(0));
+
+        let account_xpub = account_xprv.public();
+        let xpub_hex = hex::encode(account_xpub.as_ref());
+
+        // Test parsing
+        let parsed_xpub = parse_account_xpub(&xpub_hex).unwrap();
+        assert_eq!(parsed_xpub.as_ref(), account_xpub.as_ref());
+    }
+
+    #[test]
+    fn test_derive_account_keys() {
+        // Use a known mnemonic to test deterministic derivation
+        let mnemonic = "test walk nut penalty hip pave soap entry language right filter choice";
+        let bip39 = Mnemonic::parse(mnemonic).unwrap();
+        let entropy = bip39.to_entropy();
+
+        let mut pbkdf2_result = [0; XPRV_SIZE];
+        let mut mac = Hmac::new(Sha512::new(), "".as_bytes());
+        pbkdf2(&mut mac, &entropy, 4096, &mut pbkdf2_result);
+        let xprv = XPrv::normalize_bytes_force3rd(pbkdf2_result);
+
+        // Derive to account level
+        let account_xprv = xprv
+            .derive(ed25519_bip32::DerivationScheme::V2, harden_index(1852))
+            .derive(ed25519_bip32::DerivationScheme::V2, harden_index(1815))
+            .derive(ed25519_bip32::DerivationScheme::V2, harden_index(0));
+
+        let account_xpub = account_xprv.public();
+
+        // Derive wallet keys with gap limit 20
+        let wallet = derive_account_keys(account_xpub, 20).unwrap();
+
+        // Should have 20 payment keys
+        assert_eq!(wallet.payment_keys.len(), 20);
+
+        // Should have a stake key
+        assert_eq!(wallet.stake_key.1.as_ref().len(), 28);
+
+        // All payment key hashes should be 28 bytes
+        for (_, hash) in &wallet.payment_keys {
+            assert_eq!(hash.as_ref().len(), 28);
+        }
+    }
+
+    #[test]
+    fn test_get_wallet_key_hashes() {
+        let mnemonic = "test walk nut penalty hip pave soap entry language right filter choice";
+        let bip39 = Mnemonic::parse(mnemonic).unwrap();
+        let entropy = bip39.to_entropy();
+
+        let mut pbkdf2_result = [0; XPRV_SIZE];
+        let mut mac = Hmac::new(Sha512::new(), "".as_bytes());
+        pbkdf2(&mut mac, &entropy, 4096, &mut pbkdf2_result);
+        let xprv = XPrv::normalize_bytes_force3rd(pbkdf2_result);
+
+        let account_xprv = xprv
+            .derive(ed25519_bip32::DerivationScheme::V2, harden_index(1852))
+            .derive(ed25519_bip32::DerivationScheme::V2, harden_index(1815))
+            .derive(ed25519_bip32::DerivationScheme::V2, harden_index(0));
+
+        let account_xpub = account_xprv.public();
+        let wallet = derive_account_keys(account_xpub, 5).unwrap();
+
+        let (payment_hashes, stake_hash) = get_wallet_key_hashes(&wallet);
+
+        // Should return 5 payment key hashes
+        assert_eq!(payment_hashes.len(), 5);
+
+        // Stake key hash should be valid
+        assert_eq!(stake_hash.as_ref().len(), 28);
     }
 }

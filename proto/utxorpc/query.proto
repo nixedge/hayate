@@ -8,15 +8,18 @@ package utxorpc.query.v1;
 service QueryService {
   // Get UTxOs by address
   rpc ReadUtxos(ReadUtxosRequest) returns (ReadUtxosResponse);
-  
+
   // Search UTxOs by pattern
   rpc SearchUtxos(SearchUtxosRequest) returns (SearchUtxosResponse);
-  
+
   // Get chain parameters
   rpc ReadParams(ReadParamsRequest) returns (ReadParamsResponse);
-  
+
   // Get chain tip
   rpc GetChainTip(GetChainTipRequest) returns (GetChainTipResponse);
+
+  // Get transaction history for an address
+  rpc GetTxHistory(GetTxHistoryRequest) returns (GetTxHistoryResponse);
 }
 
 message ReadUtxosRequest {
@@ -70,4 +73,13 @@ message Asset {
   bytes policy_id = 1;
   bytes asset_name = 2;
   uint64 amount = 3;
+}
+
+message GetTxHistoryRequest {
+  bytes address = 1;  // Address to query
+  uint32 max_txs = 2;  // Maximum number of transactions to return (0 = all)
+}
+
+message GetTxHistoryResponse {
+  repeated bytes tx_hashes = 1;  // Transaction hashes
 }

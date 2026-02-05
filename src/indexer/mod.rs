@@ -64,13 +64,24 @@ pub struct NetworkStorage {
     pub balance_tree: MonoidalLsmTree<u64>,
     pub governance_tree: LsmTree,
     pub governance_merkle: IncrementalMerkleTree,
-    
+
     // Staking and rewards (cardano-wallet pattern)
     pub rewards_tracker: RewardsTracker,
-    
+
     // Epoch nonce for leader schedule
     pub nonce_tree: LsmTree,
-    
+
+    // Chain tip tracking
+    pub chain_tip_tree: LsmTree,
+
+    // Address -> UTxO keys index for efficient queries
+    // Key: address_hex, Value: JSON array of UTxO keys
+    pub address_utxo_index: LsmTree,
+
+    // Transaction history: address -> tx hashes
+    // Key: address_hex, Value: JSON array of tx hashes
+    pub address_tx_index: LsmTree,
+
     // Track which epoch we started indexing from
     pub indexing_start_epoch: u64,
 }
@@ -78,18 +89,21 @@ pub struct NetworkStorage {
 impl NetworkStorage {
     pub fn open(base_path: PathBuf, network: Network) -> Result<Self> {
         let network_path = base_path.join(network.as_str());
-        
+
         tracing::info!("Opening storage for {} at {:?}", network.as_str(), network_path);
-        
+
         let utxo_tree = LsmTree::open(network_path.join("utxos"), LsmConfig::default())?;
         let balance_tree = MonoidalLsmTree::open(network_path.join("balances"), LsmConfig::default())?;
         let governance_tree = LsmTree::open(network_path.join("governance"), LsmConfig::default())?;
         let governance_merkle = IncrementalMerkleTree::new(32);
         let nonce_tree = LsmTree::open(network_path.join("nonces"), LsmConfig::default())?;
-        
+        let chain_tip_tree = LsmTree::open(network_path.join("chain_tip"), LsmConfig::default())?;
+        let address_utxo_index = LsmTree::open(network_path.join("address_utxos"), LsmConfig::default())?;
+        let address_tx_index = LsmTree::open(network_path.join("address_txs"), LsmConfig::default())?;
+
         let start_epoch = 0;
         let rewards_tracker = RewardsTracker::open(network_path.join("rewards"), start_epoch)?;
-        
+
         Ok(Self {
             network,
             utxo_tree,
@@ -98,6 +112,9 @@ impl NetworkStorage {
             governance_merkle,
             rewards_tracker,
             nonce_tree,
+            chain_tip_tree,
+            address_utxo_index,
+            address_tx_index,
             indexing_start_epoch: start_epoch,
         })
     }
@@ -115,11 +132,135 @@ impl NetworkStorage {
     
     pub fn get_nonce(&self, epoch: u64) -> Result<Option<Vec<u8>>> {
         let key = format!("nonce:{}", epoch);
-        
+
         if let Some(value) = self.nonce_tree.get(&Key::from(key.as_bytes()))? {
             Ok(Some(value.as_ref().to_vec()))
         } else {
             Ok(None)
+        }
+    }
+
+    /// Store chain tip
+    pub fn store_chain_tip(&mut self, slot: u64, hash: &[u8]) -> Result<()> {
+        let tip_data = serde_json::json!({
+            "slot": slot,
+            "hash": hex::encode(hash),
+        });
+
+        self.chain_tip_tree.insert(
+            &Key::from(b"current_tip"),
+            &Value::from(&serde_json::to_vec(&tip_data)?),
+        )?;
+
+        Ok(())
+    }
+
+    /// Get current chain tip
+    pub fn get_chain_tip(&self) -> Result<Option<ChainTip>> {
+        if let Some(value) = self.chain_tip_tree.get(&Key::from(b"current_tip"))? {
+            let tip_data: serde_json::Value = serde_json::from_slice(value.as_ref())?;
+
+            Ok(Some(ChainTip {
+                height: 0, // TODO: track height
+                slot: tip_data["slot"].as_u64().unwrap_or(0),
+                hash: hex::decode(tip_data["hash"].as_str().unwrap_or("")).unwrap_or_default(),
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Add a UTxO to the address index
+    pub fn add_utxo_to_address_index(&mut self, address_hex: &str, utxo_key: &str) -> Result<()> {
+        let addr_key = Key::from(address_hex.as_bytes());
+
+        // Get current UTxO list for this address
+        let mut utxo_keys: Vec<String> = if let Some(value) = self.address_utxo_index.get(&addr_key)? {
+            serde_json::from_slice(value.as_ref())?
+        } else {
+            Vec::new()
+        };
+
+        // Add new UTxO key if not already present
+        if !utxo_keys.contains(&utxo_key.to_string()) {
+            utxo_keys.push(utxo_key.to_string());
+
+            // Store updated list
+            let value = Value::from(&serde_json::to_vec(&utxo_keys)?);
+            self.address_utxo_index.insert(&addr_key, &value)?;
+        }
+
+        Ok(())
+    }
+
+    /// Remove a UTxO from the address index
+    pub fn remove_utxo_from_address_index(&mut self, address_hex: &str, utxo_key: &str) -> Result<()> {
+        let addr_key = Key::from(address_hex.as_bytes());
+
+        // Get current UTxO list for this address
+        if let Some(value) = self.address_utxo_index.get(&addr_key)? {
+            let mut utxo_keys: Vec<String> = serde_json::from_slice(value.as_ref())?;
+
+            // Remove the UTxO key
+            utxo_keys.retain(|k| k != utxo_key);
+
+            if utxo_keys.is_empty() {
+                // Delete the index entry if no UTxOs left
+                self.address_utxo_index.delete(&addr_key)?;
+            } else {
+                // Store updated list
+                let value = Value::from(&serde_json::to_vec(&utxo_keys)?);
+                self.address_utxo_index.insert(&addr_key, &value)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Get all UTxO keys for an address
+    pub fn get_utxos_for_address(&self, address_hex: &str) -> Result<Vec<String>> {
+        let addr_key = Key::from(address_hex.as_bytes());
+
+        if let Some(value) = self.address_utxo_index.get(&addr_key)? {
+            let utxo_keys: Vec<String> = serde_json::from_slice(value.as_ref())?;
+            Ok(utxo_keys)
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
+    /// Add a transaction to the address history
+    pub fn add_tx_to_address_history(&mut self, address_hex: &str, tx_hash_hex: &str) -> Result<()> {
+        let addr_key = Key::from(address_hex.as_bytes());
+
+        // Get current tx list for this address
+        let mut tx_hashes: Vec<String> = if let Some(value) = self.address_tx_index.get(&addr_key)? {
+            serde_json::from_slice(value.as_ref())?
+        } else {
+            Vec::new()
+        };
+
+        // Add new tx hash if not already present
+        if !tx_hashes.contains(&tx_hash_hex.to_string()) {
+            tx_hashes.push(tx_hash_hex.to_string());
+
+            // Store updated list
+            let value = Value::from(&serde_json::to_vec(&tx_hashes)?);
+            self.address_tx_index.insert(&addr_key, &value)?;
+        }
+
+        Ok(())
+    }
+
+    /// Get transaction history for an address
+    pub fn get_tx_history_for_address(&self, address_hex: &str) -> Result<Vec<String>> {
+        let addr_key = Key::from(address_hex.as_bytes());
+
+        if let Some(value) = self.address_tx_index.get(&addr_key)? {
+            let tx_hashes: Vec<String> = serde_json::from_slice(value.as_ref())?;
+            Ok(tx_hashes)
+        } else {
+            Ok(Vec::new())
         }
     }
 }
