@@ -7,7 +7,7 @@ pub mod block_processor;
 use cardano_lsm::{LsmTree, LsmConfig, MonoidalLsmTree, IncrementalMerkleTree, Key, Value};
 use std::path::PathBuf;
 use std::collections::HashMap;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, broadcast};
 use anyhow::Result;
 
 #[allow(unused_imports)]
@@ -15,6 +15,16 @@ pub use block_processor::{BlockProcessor, WalletFilter, BlockStats};
 
 // Import RewardsTracker from the rewards module
 use crate::rewards::RewardsTracker;
+
+/// Block update broadcast to subscribers
+#[derive(Debug, Clone)]
+pub struct BlockUpdate {
+    pub network: Network,
+    pub height: u64,
+    pub slot: u64,
+    pub hash: Vec<u8>,
+    pub tx_hashes: Vec<Vec<u8>>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Network {
@@ -276,15 +286,31 @@ pub struct HayateIndexer {
     pub networks: RwLock<HashMap<Network, NetworkStorage>>,
     pub account_xpubs: RwLock<Vec<String>>,
     pub gap_limit: u32,
+    block_updates: broadcast::Sender<BlockUpdate>,
 }
 
 impl HayateIndexer {
     pub fn new(_base_path: PathBuf, gap_limit: u32) -> Result<Self> {
+        // Create broadcast channel with capacity for 1000 block updates
+        let (block_updates, _) = broadcast::channel(1000);
+
         Ok(Self {
             networks: RwLock::new(HashMap::new()),
             account_xpubs: RwLock::new(Vec::new()),
             gap_limit,
+            block_updates,
         })
+    }
+
+    /// Subscribe to block updates
+    pub fn subscribe_blocks(&self) -> broadcast::Receiver<BlockUpdate> {
+        self.block_updates.subscribe()
+    }
+
+    /// Broadcast a new block update to all subscribers
+    pub fn broadcast_block(&self, update: BlockUpdate) {
+        // Ignore send errors (no subscribers is okay)
+        let _ = self.block_updates.send(update);
     }
     
     pub async fn add_network(&self, network: Network, base_path: PathBuf) -> Result<()> {

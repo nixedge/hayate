@@ -13,7 +13,7 @@ pub mod query {
 
 use query::{
     query_service_server::QueryService,
-    ReadUtxosRequest, ReadUtxosResponse, Utxo,
+    ReadUtxosRequest, ReadUtxosResponse, Utxo, Asset,
     SearchUtxosRequest, SearchUtxosResponse,
     ReadParamsRequest, ReadParamsResponse,
     GetChainTipRequest, GetChainTipResponse,
@@ -90,15 +90,46 @@ impl QueryService for QueryServiceImpl {
                         .and_then(|v| v.as_u64())
                         .ok_or_else(|| Status::internal("Invalid amount"))?;
 
+                    // Extract multi-assets
+                    let assets = if let Some(assets_obj) = utxo_json.get("assets").and_then(|v| v.as_object()) {
+                        assets_obj.iter().filter_map(|(asset_key, amount_val)| {
+                            let amount = amount_val.as_u64()?;
+                            // asset_key format: "policy_id.asset_name"
+                            let (policy_hex, asset_name_hex) = asset_key.split_once('.')?;
+                            let policy_id = hex::decode(policy_hex).ok()?;
+                            let asset_name = hex::decode(asset_name_hex).ok()?;
+
+                            Some(query::Asset {
+                                policy_id,
+                                asset_name,
+                                amount,
+                            })
+                        }).collect()
+                    } else {
+                        vec![]
+                    };
+
+                    // Extract datum hash
+                    let datum_hash = utxo_json.get("datum_hash")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| hex::decode(s).ok())
+                        .unwrap_or_default();
+
+                    // Extract inline datum
+                    let datum = utxo_json.get("datum")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| hex::decode(s).ok())
+                        .unwrap_or_default();
+
                     // Create Utxo proto message
                     utxos.push(Utxo {
                         tx_hash,
                         output_index,
                         address,
                         amount,
-                        assets: vec![], // TODO: Add multi-asset support
-                        datum_hash: vec![],
-                        datum: vec![],
+                        assets,
+                        datum_hash,
+                        datum,
                     });
                 }
             }

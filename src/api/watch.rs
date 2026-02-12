@@ -48,11 +48,32 @@ impl WatchService for WatchServiceImpl {
         &self,
         _request: Request<FollowTipRequest>,
     ) -> Result<Response<Self::FollowTipStream>, Status> {
-        let (_tx, rx) = tokio::sync::mpsc::channel(100);
-        
-        // TODO: Implement tip following
-        tracing::debug!("FollowTip stream started");
-        
+        let (tx, rx) = tokio::sync::mpsc::channel(100);
+
+        // Subscribe to block updates from the indexer
+        let mut block_rx = self._indexer.subscribe_blocks();
+
+        // Spawn task to forward block updates to the stream
+        tokio::spawn(async move {
+            tracing::info!("FollowTip stream started");
+
+            while let Ok(block_update) = block_rx.recv().await {
+                let response = FollowTipResponse {
+                    height: block_update.height,
+                    slot: block_update.slot,
+                    hash: block_update.hash,
+                    tx_hashes: block_update.tx_hashes,
+                };
+
+                if tx.send(Ok(response)).await.is_err() {
+                    tracing::debug!("FollowTip stream client disconnected");
+                    break;
+                }
+            }
+
+            tracing::debug!("FollowTip stream ended");
+        });
+
         Ok(Response::new(ReceiverStream::new(rx)))
     }
     

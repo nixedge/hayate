@@ -13,6 +13,10 @@ categories = ["database", "cryptography::cryptocurrencies"]
 name = "hayate"
 path = "src/main.rs"
 
+[[bin]]
+name = "hayate-node"
+path = "src/node/main.rs"
+
 [dependencies]
 # LSM storage engine (local path)
 cardano-lsm = { path = "../cardano-lsm-rust" }
@@ -56,6 +60,7 @@ pallas-addresses = "0.33.0"
 pallas-configs = "0.33.0"
 pallas = "0.33.0"
 pallas-codec = "0.33.0"
+pallas-primitives = "0.33.0"
 
 # Crypto and key derivation
 bip39 = "2"
@@ -68,6 +73,11 @@ bech32 = "0.11"
 hex = "0.4"
 futures-util = "0.3"
 futures-executor = "0.3"
+crc32fast = "1.4"
+
+# Exact arithmetic for rewards calculation
+num-rational = "0.4"
+num-traits = "0.2"
 
 [build-dependencies]
 tonic-build = "0.12"
