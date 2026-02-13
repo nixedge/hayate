@@ -160,8 +160,8 @@ impl QueryService for QueryServiceImpl {
 
         tracing::debug!("SearchUtxos with pattern: {}", req.pattern);
 
-        let storage = self.storage.read().await;
-        let mut utxos = Vec::new();
+        let _storage = self.storage.read().await;
+        let utxos = Vec::new();
 
         // Pattern matching:
         // - "*" = all UTxOs

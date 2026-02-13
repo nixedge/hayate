@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use pallas_network::facades::{NodeClient, PeerClient};
 use pallas_network::miniprotocols::blockfetch::Client as BlockfetchClient;
 use pallas_network::miniprotocols::chainsync::NextResponse;
-use amaru_kernel::{Point, peer::Peer};
+use amaru_kernel::{Point, Peer};
 use amaru_network::chain_sync_client::ChainSyncClient;
 use std::path::Path;
 

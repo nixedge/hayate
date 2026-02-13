@@ -2,34 +2,44 @@
   perSystem = {
     config,
     pkgs,
+    inputs',
     ...
-  }: {
+  }: let
+    # Use nightly toolchain - same as packages.nix
+    toolchain = with inputs'.fenix.packages;
+      combine [
+        minimal.rustc
+        minimal.cargo
+        complete.clippy
+        complete.rustfmt
+        complete.rust-analyzer
+      ];
+  in {
     devShells.default = with pkgs;
       mkShell {
         packages = [
-          # Rust toolchain (nightly from rust-overlay)
-          rust-bin.nightly.latest.default
+          # Rust toolchain (nightly from fenix)
+          toolchain
           cmake
           pkg-config
           openssl
           zlib
-          rust-analyzer
-          
+
           # Protocol Buffers compiler (for UTxORPC)
           protobuf
-          
+
           # Task runner
           just
-          
+
           # Utilities
           jq
           fd
           ripgrep
-          
+
           # Tree formatter
           config.treefmt.build.wrapper
         ];
-        
+
         shellHook = ''
           echo "疾風 Hayate - Swift Cardano Indexer"
           echo ""

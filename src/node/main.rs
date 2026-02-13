@@ -101,7 +101,9 @@ async fn main() -> Result<()> {
     // Connect to node via chain sync
     let start_point = if let Some((tip_slot, tip_hash)) = storage.get_chain_tip()? {
         info!("Resuming from slot {}", tip_slot);
-        Point::Specific(tip_slot, tip_hash)
+        let hash_bytes: [u8; 32] = tip_hash.try_into()
+            .map_err(|_| anyhow::anyhow!("Invalid hash length"))?;
+        Point::Specific(tip_slot.into(), hash_bytes.into())
     } else {
         info!("Starting from origin");
         Point::Origin
@@ -114,13 +116,12 @@ async fn main() -> Result<()> {
     // Start processing blocks
     let mut blocks_processed = 0u64;
     let mut current_epoch = 0u64;
-    let stop_slot = args.from_slot.unwrap_or(435000); // Default to just past first epoch boundary
 
     // Initialize rolling nonce with Shelley genesis nonce for Preview network
     // This is the starting point for nonce evolution
     let mut rolling_nonce: Option<Hash<32>> = None;
 
-    info!("🔄 Starting block processing (stop at slot {})...", stop_slot);
+    info!("🔄 Starting block processing...");
 
     loop {
         match sync.request_next().await? {
@@ -222,12 +223,6 @@ async fn main() -> Result<()> {
                             info!("Processed {} blocks, slot: {}, epoch: {}, txs: {}",
                                 blocks_processed, slot, epoch, tx_count);
                         }
-
-                        // Check stop condition
-                        if slot >= stop_slot {
-                            info!("✅ Reached target slot {}, stopping", stop_slot);
-                            break;
-                        }
                     }
                     Err(e) => {
                         error!("Failed to parse block: {}", e);
@@ -294,8 +289,8 @@ fn parse_block_with_nonce(block_bytes: &[u8]) -> Result<(u64, Vec<u8>, usize, Op
 
 async fn process_block_simple(
     storage: &mut NodeStorage,
-    slot: u64,
-    block_hash: &[u8],
+    _slot: u64,
+    _block_hash: &[u8],
     block_bytes: &[u8],
 ) -> Result<()> {
     use pallas_traverse::{MultiEraBlock, MultiEraTx, MultiEraInput, MultiEraOutput};
