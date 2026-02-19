@@ -13,7 +13,7 @@ pub mod query {
 
 use query::{
     query_service_server::QueryService,
-    ReadUtxosRequest, ReadUtxosResponse, Utxo, Asset,
+    ReadUtxosRequest, ReadUtxosResponse, Utxo,
     SearchUtxosRequest, SearchUtxosResponse,
     ReadParamsRequest, ReadParamsResponse,
     GetChainTipRequest, GetChainTipResponse,
@@ -25,6 +25,7 @@ pub struct QueryServiceImpl {
 }
 
 impl QueryServiceImpl {
+    #[allow(dead_code)]
     pub fn new(storage: NetworkStorage) -> Self {
         Self {
             storage: Arc::new(RwLock::new(storage))

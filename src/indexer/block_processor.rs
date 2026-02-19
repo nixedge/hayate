@@ -44,7 +44,7 @@ impl WalletFilter {
         }
 
         // Parse Shelley address
-        use pallas_addresses::{Address, ShelleyAddress, ShelleyDelegationPart};
+        use pallas_addresses::{Address, ShelleyDelegationPart};
 
         let address = match Address::from_bytes(address_bytes) {
             Ok(Address::Shelley(addr)) => addr,

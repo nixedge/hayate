@@ -8,7 +8,6 @@
 // using exact rational arithmetic to match Haskell's Ratio type.
 
 use num_rational::Ratio;
-use num_traits::ToPrimitive;
 
 /// Type alias for rational numbers (matches Haskell's Ratio)
 pub type Rational = Ratio<i64>;

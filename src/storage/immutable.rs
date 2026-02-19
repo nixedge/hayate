@@ -1,7 +1,7 @@
 // Immutable DB implementation - compatible with Cardano node format
 
 use anyhow::{anyhow, bail, Context, Result};
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};

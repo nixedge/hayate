@@ -2,7 +2,7 @@
 // Full UTxO set and epoch boundary snapshots
 
 use cardano_lsm::{LsmTree, LsmConfig, Key, Value};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use serde::{Serialize, Deserialize};
 use anyhow::Result;
 use std::collections::HashMap;
@@ -77,6 +77,7 @@ pub struct NodeStorage {
     // This avoids needing to iterate all UTxOs
     current_stake: HashMap<Vec<u8>, u64>,
 
+    #[allow(dead_code)]
     base_path: PathBuf,
 }
 

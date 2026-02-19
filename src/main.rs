@@ -18,7 +18,8 @@ use std::path::PathBuf;
 use cli::Args;
 use chain_sync::HayateSync;
 use pallas_network::miniprotocols::chainsync::NextResponse;
-use amaru_kernel::Point;
+use amaru_kernel::Point as AmaruPoint;
+use pallas_network::miniprotocols::Point as PallasPoint;
 use pallas_traverse::MultiEraBlock;
 
 /// Run chain sync from a node socket
@@ -41,10 +42,10 @@ async fn run_chain_sync(
         info!("Resuming from slot {}", tip.slot);
         let hash_bytes: [u8; 32] = tip.hash.try_into()
             .map_err(|_| anyhow::anyhow!("Invalid hash length"))?;
-        Point::Specific(tip.slot.into(), hash_bytes.into())
+        AmaruPoint::Specific(tip.slot.into(), hash_bytes.into())
     } else {
         info!("Starting from origin");
-        Point::Origin
+        AmaruPoint::Origin
     };
 
     drop(networks); // Release read lock
@@ -104,14 +105,13 @@ async fn run_chain_sync(
             NextResponse::RollBackward(point, _tip) => {
                 info!("⚠️  Rollback to {:?}", point);
                 match point {
-                    Point::Specific(slot, _) => {
-                        let target_slot: u64 = slot.into();
-                        match processor.rollback_to(target_slot) {
+                    PallasPoint::Specific(slot, _) => {
+                        match processor.rollback_to(slot) {
                             Ok(count) => info!("✓ Rolled back {} blocks", count),
                             Err(e) => tracing::error!("Failed to rollback: {}", e),
                         }
                     }
-                    Point::Origin => {
+                    PallasPoint::Origin => {
                         info!("Rollback to origin requested");
                         // TODO: Handle rollback to origin
                     }

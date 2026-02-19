@@ -21,6 +21,7 @@ pub struct SubmitServiceImpl {
 }
 
 impl SubmitServiceImpl {
+    #[allow(dead_code)]
     pub fn new(indexer: Arc<HayateIndexer>) -> Self {
         Self { _indexer: indexer }
     }

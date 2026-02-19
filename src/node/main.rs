@@ -6,9 +6,9 @@ use std::path::PathBuf;
 use anyhow::Result;
 
 // Import from lib
-use hayate::node::{NodeStorage, UtxoEntry, slot_to_epoch, is_epoch_boundary};
+use hayate::node::{NodeStorage, UtxoEntry, slot_to_epoch};
 use hayate::indexer::Network;
-use hayate::chain_sync::{HayateSync, NodeConnection};
+use hayate::chain_sync::HayateSync;
 use amaru_kernel::Point;
 use pallas_network::miniprotocols::chainsync::NextResponse;
 use pallas_crypto::nonce::generate_rolling_nonce;
@@ -240,22 +240,6 @@ async fn main() -> Result<()> {
             }
         }
     }
-
-    info!("🎉 Sync complete! Processed {} blocks", blocks_processed);
-    Ok(())
-}
-
-fn parse_block(block_bytes: &[u8]) -> Result<(u64, Vec<u8>, usize)> {
-    use pallas_traverse::{MultiEraBlock, MultiEraTx};
-
-    let block = MultiEraBlock::decode(block_bytes)
-        .map_err(|e| anyhow::anyhow!("Failed to decode block: {}", e))?;
-
-    let slot = block.slot();
-    let hash = block.hash().to_vec();
-    let tx_count = block.txs().len();
-
-    Ok((slot, hash, tx_count))
 }
 
 /// Parse block and extract VRF nonce for epoch nonce calculation
@@ -293,7 +277,7 @@ async fn process_block_simple(
     _block_hash: &[u8],
     block_bytes: &[u8],
 ) -> Result<()> {
-    use pallas_traverse::{MultiEraBlock, MultiEraTx, MultiEraInput, MultiEraOutput};
+    use pallas_traverse::MultiEraBlock;
 
     let block = MultiEraBlock::decode(block_bytes)?;
 
@@ -312,7 +296,7 @@ async fn process_block_simple(
         // Process outputs (add UTxOs)
         for (output_index, output) in tx.outputs().into_iter().enumerate() {
             let address_bytes = output.address()?.to_vec();
-            let amount = output.lovelace_amount();
+            let amount = output.value().coin();
 
             // Extract stake credential from address
             let stake_credential = extract_stake_credential(&address_bytes)?;
@@ -328,7 +312,7 @@ async fn process_block_simple(
                     let amount = match &asset {
                         pallas_traverse::MultiEraAsset::AlonzoCompatibleOutput(_, _, amt) => *amt as u64,
                         pallas_traverse::MultiEraAsset::ConwayOutput(_, _, amt) => {
-                            use pallas_codec::utils::PositiveCoin;
+                            
                             u64::from(*amt)
                         }
                         _ => 0, // Shouldn't happen for outputs
@@ -348,8 +332,8 @@ async fn process_block_simple(
                         }
                         MintedDatumOption::Data(inline_datum) => {
                             // Inline datum (post-Babbage)
-                            use pallas_codec::minicbor;
-                            use pallas_crypto::hash::Hasher;
+                            
+                            
 
                             // Get the raw bytes from the KeepRaw wrapper
                             let datum_bytes = inline_datum.raw_cbor().to_vec();
