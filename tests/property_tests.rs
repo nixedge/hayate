@@ -206,8 +206,6 @@ fn prop_block_processor_monotonic_slots() {
                 prop_assert!(processor.current_slot > 0);
             }
         }
-
-        Ok(())
     });
 }
 

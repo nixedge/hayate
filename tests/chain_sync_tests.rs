@@ -90,9 +90,12 @@ fn test_point_origin() {
 
 #[test]
 fn test_point_specific() {
-    let slot = 123456;
-    let hash = vec![1, 2, 3, 4];
-    let point = Point::Specific(slot, hash.clone());
+    use amaru_kernel::{Slot, Hash};
+
+    let slot = Slot::from(123456u64);
+    let hash_bytes = [1u8; 32];
+    let hash = Hash::<32>::from(hash_bytes);
+    let point = Point::Specific(slot, hash);
 
     match point {
         Point::Specific(s, h) => {
@@ -122,8 +125,10 @@ async fn test_malformed_host_address() {
 
 #[tokio::test]
 async fn test_connect_with_specific_point() {
-    let slot = 100000;
-    let hash = vec![0; 32]; // 32-byte hash
+    use amaru_kernel::{Slot, Hash};
+
+    let slot = Slot::from(100000u64);
+    let hash = Hash::<32>::from([0u8; 32]);
     let point = Point::Specific(slot, hash);
 
     let result = HayateSync::connect("localhost:3001", 764824073, point).await;

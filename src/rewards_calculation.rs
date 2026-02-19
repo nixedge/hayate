@@ -379,6 +379,7 @@ pub fn calculate_pool_rewards(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use num_traits::ToPrimitive;
 
     #[test]
     fn test_preview_epoch1_to_2() {

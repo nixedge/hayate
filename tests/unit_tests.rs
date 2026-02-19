@@ -39,14 +39,12 @@ fn test_derive_account_keys() {
     // Derive account with gap limit 20
     let account = derive_account_keys(xpub.clone(), 20).unwrap();
 
-    // Should have 20 payment keys and 20 stake keys
-    assert_eq!(account.external_keys.len(), 20);
-    assert_eq!(account.internal_keys.len(), 20);
-    assert_eq!(account.stake_keys.len(), 20);
+    // Should have 20 payment keys and 1 stake key
+    assert_eq!(account.payment_keys.len(), 20);
 
     // All keys should be different
     for i in 0..19 {
-        assert_ne!(account.external_keys[i].key_hash(), account.external_keys[i + 1].key_hash());
+        assert_ne!(account.payment_keys[i].1, account.payment_keys[i + 1].1);
     }
 }
 
@@ -56,10 +54,10 @@ fn test_get_wallet_key_hashes() {
     let xpub = parse_account_xpub(hex_xpub).unwrap();
     let account = derive_account_keys(xpub, 5).unwrap();
 
-    let (payment_hashes, stake_hash) = get_wallet_key_hashes(&account);
+    let (payment_hashes, _stake_hash) = get_wallet_key_hashes(&account);
 
-    // Should have payment hashes from external and internal keys
-    assert_eq!(payment_hashes.len(), 10); // 5 external + 5 internal
+    // Should have 5 payment hashes
+    assert_eq!(payment_hashes.len(), 5);
 
     // All hashes should be unique
     let mut unique_hashes = payment_hashes.clone();
@@ -80,8 +78,8 @@ fn test_derive_keys_deterministic() {
     // Should produce identical keys
     for i in 0..5 {
         assert_eq!(
-            account1.external_keys[i].key_hash(),
-            account2.external_keys[i].key_hash()
+            account1.payment_keys[i].1,
+            account2.payment_keys[i].1
         );
     }
 }
