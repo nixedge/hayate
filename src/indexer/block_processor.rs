@@ -448,10 +448,15 @@ impl BlockProcessor {
                     for asset in policy_assets.assets() {
                         let asset_name_hex = hex::encode(asset.name());
                         let key = format!("{}.{}", policy_id_hex, asset_name_hex);
-                        // TODO: Extract actual asset amount from Multi Era Asset
-                        // MultiEraAsset varies by era - need to match on the variant
-                        // For now, store 1 as a placeholder to get compilation working
-                        map.insert(key, serde_json::json!(1u64));
+
+                        // Extract actual asset amount based on era
+                        let amount = match &asset {
+                            pallas_traverse::MultiEraAsset::AlonzoCompatibleOutput(_, _, amt) => *amt as u64,
+                            pallas_traverse::MultiEraAsset::ConwayOutput(_, _, amt) => u64::from(*amt),
+                            _ => 0, // Shouldn't happen for outputs
+                        };
+
+                        map.insert(key, serde_json::json!(amount));
                     }
                 }
                 Some(serde_json::Value::Object(map))
@@ -461,12 +466,34 @@ impl BlockProcessor {
         };
 
         // Extract datum - CRITICAL for midnight-node governance and CNight queries
-        // Midnight-node needs RAW CBOR bytes, not decoded JSON
-        // TODO: Implement proper datum extraction from Babbage+ outputs
-        // MultiEraOutput is an enum - need to match on the era and extract datum
-        let datum_hash_hex: Option<String> = None;  // TODO: Extract from output
-        let inline_datum_hex: Option<String> = None;  // TODO: Extract from output
-        let script_ref_hex: Option<String> = None;  // TODO: Extract from output
+        // Midnight-node needs RAW CBOR bytes (hex-encoded), not decoded JSON
+        let (datum_hash_hex, inline_datum_hex) = match output.datum() {
+            Some(datum_option) => {
+                use pallas_primitives::conway::MintedDatumOption;
+                match datum_option {
+                    MintedDatumOption::Hash(hash) => {
+                        // Datum hash only (datum stored separately on-chain)
+                        (Some(hex::encode(hash)), None)
+                    }
+                    MintedDatumOption::Data(inline_datum) => {
+                        // Inline datum (Babbage+ era) - extract raw CBOR bytes
+                        let datum_bytes = inline_datum.raw_cbor().to_vec();
+
+                        // Compute datum hash using Blake2b256
+                        let mut hasher = pallas_crypto::hash::Hasher::<256>::new();
+                        hasher.input(&datum_bytes);
+                        let hash = hasher.finalize();
+
+                        // Return both hash and raw CBOR (hex-encoded)
+                        (Some(hex::encode(hash)), Some(hex::encode(datum_bytes)))
+                    }
+                }
+            }
+            None => (None, None),
+        };
+
+        // TODO: Extract script reference (Babbage+ feature)
+        let script_ref_hex: Option<String> = None;
 
         // Store UTxO data with all fields midnight-node needs
         let mut utxo_data = serde_json::json!({
