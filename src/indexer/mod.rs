@@ -92,6 +92,13 @@ pub struct NetworkStorage {
     // Key: address_hex, Value: JSON array of tx hashes
     pub address_tx_index: LsmTree,
 
+    // Token transaction indexes
+    // Policy -> tx hashes: policy_id_hex -> JSON array of tx hashes
+    pub policy_tx_index: LsmTree,
+
+    // Asset -> tx hashes: "policy_id_hex:asset_name_hex" -> JSON array of tx hashes
+    pub asset_tx_index: LsmTree,
+
     // Track which epoch we started indexing from
     pub indexing_start_epoch: u64,
 }
@@ -110,6 +117,8 @@ impl NetworkStorage {
         let chain_tip_tree = LsmTree::open(network_path.join("chain_tip"), LsmConfig::default())?;
         let address_utxo_index = LsmTree::open(network_path.join("address_utxos"), LsmConfig::default())?;
         let address_tx_index = LsmTree::open(network_path.join("address_txs"), LsmConfig::default())?;
+        let policy_tx_index = LsmTree::open(network_path.join("policy_txs"), LsmConfig::default())?;
+        let asset_tx_index = LsmTree::open(network_path.join("asset_txs"), LsmConfig::default())?;
 
         let start_epoch = 0;
         let rewards_tracker = RewardsTracker::open(network_path.join("rewards"), start_epoch)?;
@@ -125,6 +134,8 @@ impl NetworkStorage {
             chain_tip_tree,
             address_utxo_index,
             address_tx_index,
+            policy_tx_index,
+            asset_tx_index,
             indexing_start_epoch: start_epoch,
         })
     }
@@ -313,6 +324,66 @@ impl NetworkStorage {
         // Scan all keys with this address prefix
         for (key, _value) in self.address_tx_index.scan_prefix(prefix.as_bytes()) {
             // Key format is "address:tx_hash", extract the tx_hash part
+            if let Ok(key_str) = std::str::from_utf8(key.as_ref()) {
+                if let Some(tx_hash) = key_str.strip_prefix(&prefix) {
+                    tx_hashes.push(tx_hash.to_string());
+                }
+            }
+        }
+
+        Ok(tx_hashes)
+    }
+
+    /// Add a transaction to the policy index
+    /// Tracks all transactions that include tokens from this policy
+    pub fn add_tx_to_policy_index(&mut self, policy_id_hex: &str, tx_hash_hex: &str) -> Result<()> {
+        // Key format: policy_id:tx_hash
+        let index_key = format!("{}:{}", policy_id_hex, tx_hash_hex);
+        let key = Key::from(index_key.as_bytes());
+
+        // Store a marker (just 1 byte)
+        self.policy_tx_index.insert(&key, &Value::from(&[1u8]))?;
+
+        Ok(())
+    }
+
+    /// Get all transactions for a policy ID
+    pub fn get_txs_for_policy(&self, policy_id_hex: &str) -> Result<Vec<String>> {
+        let prefix = format!("{}:", policy_id_hex);
+        let mut tx_hashes = Vec::new();
+
+        // Scan all keys with this policy prefix
+        for (key, _value) in self.policy_tx_index.scan_prefix(prefix.as_bytes()) {
+            if let Ok(key_str) = std::str::from_utf8(key.as_ref()) {
+                if let Some(tx_hash) = key_str.strip_prefix(&prefix) {
+                    tx_hashes.push(tx_hash.to_string());
+                }
+            }
+        }
+
+        Ok(tx_hashes)
+    }
+
+    /// Add a transaction to the asset index
+    /// Tracks all transactions that include a specific asset (policy + name)
+    pub fn add_tx_to_asset_index(&mut self, policy_id_hex: &str, asset_name_hex: &str, tx_hash_hex: &str) -> Result<()> {
+        // Key format: policy_id:asset_name:tx_hash
+        let index_key = format!("{}:{}:{}", policy_id_hex, asset_name_hex, tx_hash_hex);
+        let key = Key::from(index_key.as_bytes());
+
+        // Store a marker (just 1 byte)
+        self.asset_tx_index.insert(&key, &Value::from(&[1u8]))?;
+
+        Ok(())
+    }
+
+    /// Get all transactions for a specific asset (policy + name)
+    pub fn get_txs_for_asset(&self, policy_id_hex: &str, asset_name_hex: &str) -> Result<Vec<String>> {
+        let prefix = format!("{}:{}:", policy_id_hex, asset_name_hex);
+        let mut tx_hashes = Vec::new();
+
+        // Scan all keys with this asset prefix
+        for (key, _value) in self.asset_tx_index.scan_prefix(prefix.as_bytes()) {
             if let Ok(key_str) = std::str::from_utf8(key.as_ref()) {
                 if let Some(tx_hash) = key_str.strip_prefix(&prefix) {
                     tx_hashes.push(tx_hash.to_string());

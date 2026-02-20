@@ -28,6 +28,7 @@ async fn run_chain_sync(
     indexer: Arc<HayateIndexer>,
     network: Network,
     socket_path: String,
+    tokens: Vec<config::TokenConfig>,
 ) -> anyhow::Result<()> {
     use indexer::block_processor::BlockProcessor;
 
@@ -69,6 +70,15 @@ async fn run_chain_sync(
     // Add wallet IDs to processor for per-wallet tip tracking
     for wallet_id in &wallet_ids {
         processor.add_wallet_id(wallet_id.clone());
+    }
+
+    // Add tracked tokens to processor
+    for token in &tokens {
+        processor.add_tracked_token(token.clone());
+    }
+
+    if !tokens.is_empty() {
+        info!("Tracking {} native token(s)", tokens.len());
     }
 
     drop(networks); // Release write lock
@@ -274,15 +284,14 @@ async fn main() -> anyhow::Result<()> {
     // Add network storage
     indexer.add_network(network.clone(), config.data_dir.clone()).await?;
 
-    // Load wallets from config
-    // TODO: Also check for smart contracts and native tokens once implemented
-    if config.wallets.is_empty() {
+    // Load wallets and tokens from config
+    if config.wallets.is_empty() && config.tokens.is_empty() {
         return Err(anyhow::anyhow!(
             "Nothing configured to index. Please configure at least one of:\n\
              - Wallet xpubs (in 'wallets' array)\n\
-             - Smart contracts (coming soon)\n\
-             - Native tokens to track (coming soon)\n\n\
-             Generate a default config with: hayate --generate-config config.toml"
+             - Native tokens to track (in 'tokens' array)\n\
+             - Smart contracts (coming soon)\n\n\
+             Generate a default config with: hayate config generate config.toml"
         ));
     }
 
@@ -299,7 +308,7 @@ async fn main() -> anyhow::Result<()> {
         info!("Running in sync mode (no API server)");
 
         // Run chain sync (this will block forever)
-        run_chain_sync(indexer, network, socket_path.clone()).await?;
+        run_chain_sync(indexer, network, socket_path.clone(), config.tokens.clone()).await?;
 
         return Ok(());
     }

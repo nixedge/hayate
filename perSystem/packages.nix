@@ -25,7 +25,6 @@
         ../Cargo.toml
         ../build.rs
         ../src
-        ../examples
         ../proto
       ];
     };

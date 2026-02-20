@@ -1,6 +1,7 @@
 // Block processor - processes blocks from chain sync and updates storage
 
 use crate::indexer::NetworkStorage;
+use crate::config::TokenConfig;
 use anyhow::{Context, Result};
 use cardano_lsm::{Key, Value};
 use pallas_crypto::hash::Hash;
@@ -105,6 +106,9 @@ pub struct BlockProcessor {
     // Wallet IDs for per-wallet tip tracking
     pub wallet_ids: Vec<String>,
 
+    // Native tokens to track (independent of wallet addresses)
+    tracked_tokens: Vec<TokenConfig>,
+
     // Rollback buffer - keep last K blocks for potential rollback
     rollback_buffer: VecDeque<RollbackInfo>,
     rollback_buffer_size: usize,
@@ -130,6 +134,7 @@ impl BlockProcessor {
             blocks_processed: 0,
             current_slot,
             wallet_ids: Vec::new(),
+            tracked_tokens: Vec::new(),
             rollback_buffer: VecDeque::with_capacity(buffer_size),
             rollback_buffer_size: buffer_size,
         }
@@ -143,6 +148,11 @@ impl BlockProcessor {
     pub fn add_wallet(&mut self, payment_key: Hash<28>, stake_key: Hash<28>) {
         self.filter.add_payment_key_hash(payment_key);
         self.filter.add_stake_credential(stake_key);
+    }
+
+    /// Add a native token to track
+    pub fn add_tracked_token(&mut self, token: TokenConfig) {
+        self.tracked_tokens.push(token);
     }
 
     /// Process a block from CBOR bytes
@@ -345,6 +355,11 @@ impl BlockProcessor {
             self.storage.add_tx_to_address_history(address_hex, &tx_hash_hex)?;
         }
 
+        // Track native tokens - check if this transaction contains any tracked tokens
+        if !self.tracked_tokens.is_empty() {
+            self.track_tokens_in_transaction(tx, &tx_hash_hex)?;
+        }
+
         // TODO: Process certificates (delegations, pool registrations, etc.)
         // TODO: Process withdrawals
         // TODO: Process metadata
@@ -452,6 +467,77 @@ impl BlockProcessor {
         stats.addresses_affected.insert(address_hex);
 
         tracing::debug!("Created UTxO: {} = {} lovelace", utxo_key, lovelace);
+
+        Ok(())
+    }
+
+    /// Track native tokens in a transaction
+    /// Checks if any outputs contain tracked tokens and adds tx to indexes
+    fn track_tokens_in_transaction(&mut self, tx: &MultiEraTx, tx_hash_hex: &str) -> Result<()> {
+        // Check all outputs for tracked tokens
+        for output in tx.outputs() {
+            let value = output.value();
+
+            // Extract multi-assets from the value
+            // assets() returns a Vec of policy assets, empty vec if no assets
+            let assets = value.assets();
+
+            if assets.is_empty() {
+                continue;
+            }
+
+            // Iterate through all policy IDs and assets in this output
+            for policy_assets in &assets {
+                let policy_id_bytes = policy_assets.policy();
+                let policy_id_hex = hex::encode(policy_id_bytes);
+
+                // Check if this policy is tracked
+                for tracked_token in &self.tracked_tokens {
+                    if tracked_token.policy_id == policy_id_hex {
+                        // Track at policy level
+                        self.storage.add_tx_to_policy_index(&policy_id_hex, tx_hash_hex)?;
+
+                        // If tracking specific assets, check asset names
+                        if let Some(ref tracked_asset_name) = tracked_token.asset_name {
+                            for asset in policy_assets.assets() {
+                                let asset_name_hex = hex::encode(asset.name());
+
+                                if &asset_name_hex == tracked_asset_name {
+                                    self.storage.add_tx_to_asset_index(
+                                        &policy_id_hex,
+                                        &asset_name_hex,
+                                        tx_hash_hex
+                                    )?;
+
+                                    tracing::debug!(
+                                        "Tracked token in tx {}: {}.{}",
+                                        tx_hash_hex,
+                                        policy_id_hex,
+                                        asset_name_hex
+                                    );
+                                }
+                            }
+                        } else {
+                            // Track all assets under this policy
+                            for asset in policy_assets.assets() {
+                                let asset_name_hex = hex::encode(asset.name());
+                                self.storage.add_tx_to_asset_index(
+                                    &policy_id_hex,
+                                    &asset_name_hex,
+                                    tx_hash_hex
+                                )?;
+                            }
+
+                            tracing::debug!(
+                                "Tracked policy in tx {}: {}",
+                                tx_hash_hex,
+                                policy_id_hex
+                            );
+                        }
+                    }
+                }
+            }
+        }
 
         Ok(())
     }

@@ -25,6 +25,27 @@ pub struct HayateConfig {
     /// Can be hex-encoded or bech32-encoded (acct_xvk...)
     #[serde(default)]
     pub wallets: Vec<String>,
+
+    /// Native tokens to track
+    /// Indexes all transactions containing these tokens, regardless of wallet
+    #[serde(default)]
+    pub tokens: Vec<TokenConfig>,
+}
+
+/// Configuration for tracking a native token
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TokenConfig {
+    /// Policy ID (hex-encoded)
+    pub policy_id: String,
+
+    /// Optional: Asset name (UTF-8 string)
+    /// If None, tracks all assets under this policy
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asset_name: Option<String>,
+
+    /// Optional: Human-friendly label for this token
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 fn default_data_dir() -> PathBuf {
@@ -139,6 +160,7 @@ impl Default for HayateConfig {
             api: ApiConfig::default(),
             networks,
             wallets: Vec::new(),
+            tokens: Vec::new(),
         }
     }
 }
