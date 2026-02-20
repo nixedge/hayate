@@ -180,98 +180,147 @@ impl NetworkStorage {
         }
     }
 
-    /// Add a UTxO to the address index
-    pub fn add_utxo_to_address_index(&mut self, address_hex: &str, utxo_key: &str) -> Result<()> {
-        let addr_key = Key::from(address_hex.as_bytes());
+    /// Store wallet-specific chain tip
+    /// Uses wallet identifier (e.g., xpub hash or stake key) as key
+    pub fn store_wallet_tip(&mut self, wallet_id: &str, slot: u64, hash: &[u8]) -> Result<()> {
+        let tip_data = serde_json::json!({
+            "slot": slot,
+            "hash": hex::encode(hash),
+        });
 
-        // Get current UTxO list for this address
-        let mut utxo_keys: Vec<String> = if let Some(value) = self.address_utxo_index.get(&addr_key)? {
-            serde_json::from_slice(value.as_ref())?
+        let key = format!("wallet_tip:{}", wallet_id);
+        self.chain_tip_tree.insert(
+            &Key::from(key.as_bytes()),
+            &Value::from(&serde_json::to_vec(&tip_data)?),
+        )?;
+
+        Ok(())
+    }
+
+    /// Get wallet-specific chain tip
+    pub fn get_wallet_tip(&self, wallet_id: &str) -> Result<Option<ChainTip>> {
+        let key = format!("wallet_tip:{}", wallet_id);
+
+        if let Some(value) = self.chain_tip_tree.get(&Key::from(key.as_bytes()))? {
+            let tip_data: serde_json::Value = serde_json::from_slice(value.as_ref())?;
+
+            Ok(Some(ChainTip {
+                height: 0,
+                slot: tip_data["slot"].as_u64().unwrap_or(0),
+                hash: hex::decode(tip_data["hash"].as_str().unwrap_or("")).unwrap_or_default(),
+            }))
         } else {
-            Vec::new()
-        };
-
-        // Add new UTxO key if not already present
-        if !utxo_keys.contains(&utxo_key.to_string()) {
-            utxo_keys.push(utxo_key.to_string());
-
-            // Store updated list
-            let value = Value::from(&serde_json::to_vec(&utxo_keys)?);
-            self.address_utxo_index.insert(&addr_key, &value)?;
+            Ok(None)
         }
+    }
+
+    /// Get the minimum wallet tip across all wallets
+    /// This determines where to resume chain sync from
+    pub fn get_min_wallet_tip(&self, wallet_ids: &[String]) -> Result<Option<ChainTip>> {
+        if wallet_ids.is_empty() {
+            // No wallets configured, use global chain tip
+            return self.get_chain_tip();
+        }
+
+        let mut min_tip: Option<ChainTip> = None;
+
+        for wallet_id in wallet_ids {
+            match self.get_wallet_tip(wallet_id)? {
+                Some(tip) => {
+                    match &min_tip {
+                        Some(current_min) => {
+                            if tip.slot < current_min.slot {
+                                min_tip = Some(tip);
+                            }
+                        }
+                        None => min_tip = Some(tip),
+                    }
+                }
+                None => {
+                    // If any wallet has no tip, start from origin
+                    return Ok(None);
+                }
+            }
+        }
+
+        Ok(min_tip)
+    }
+
+    /// Add a UTxO to the address index
+    /// Uses individual keys for O(1) operations instead of JSON arrays
+    pub fn add_utxo_to_address_index(&mut self, address_hex: &str, utxo_key: &str) -> Result<()> {
+        // Key format: address:utxo_key
+        let index_key = format!("{}:{}", address_hex, utxo_key);
+        let key = Key::from(index_key.as_bytes());
+
+        // Store a marker (just 1 byte) - the key itself contains the information
+        self.address_utxo_index.insert(&key, &Value::from(&[1u8]))?;
 
         Ok(())
     }
 
     /// Remove a UTxO from the address index
+    /// Uses individual keys for O(1) operations
     pub fn remove_utxo_from_address_index(&mut self, address_hex: &str, utxo_key: &str) -> Result<()> {
-        let addr_key = Key::from(address_hex.as_bytes());
+        // Key format: address:utxo_key
+        let index_key = format!("{}:{}", address_hex, utxo_key);
+        let key = Key::from(index_key.as_bytes());
 
-        // Get current UTxO list for this address
-        if let Some(value) = self.address_utxo_index.get(&addr_key)? {
-            let mut utxo_keys: Vec<String> = serde_json::from_slice(value.as_ref())?;
-
-            // Remove the UTxO key
-            utxo_keys.retain(|k| k != utxo_key);
-
-            if utxo_keys.is_empty() {
-                // Delete the index entry if no UTxOs left
-                self.address_utxo_index.delete(&addr_key)?;
-            } else {
-                // Store updated list
-                let value = Value::from(&serde_json::to_vec(&utxo_keys)?);
-                self.address_utxo_index.insert(&addr_key, &value)?;
-            }
-        }
+        // Simply delete the key - O(1) operation
+        self.address_utxo_index.delete(&key)?;
 
         Ok(())
     }
 
     /// Get all UTxO keys for an address
+    /// Uses prefix scan for efficient retrieval
     pub fn get_utxos_for_address(&self, address_hex: &str) -> Result<Vec<String>> {
-        let addr_key = Key::from(address_hex.as_bytes());
+        let prefix = format!("{}:", address_hex);
+        let mut utxo_keys = Vec::new();
 
-        if let Some(value) = self.address_utxo_index.get(&addr_key)? {
-            let utxo_keys: Vec<String> = serde_json::from_slice(value.as_ref())?;
-            Ok(utxo_keys)
-        } else {
-            Ok(Vec::new())
+        // Scan all keys with this address prefix
+        for (key, _value) in self.address_utxo_index.scan_prefix(prefix.as_bytes()) {
+            // Key format is "address:utxo_key", extract the utxo_key part
+            if let Ok(key_str) = std::str::from_utf8(key.as_ref()) {
+                if let Some(utxo_key) = key_str.strip_prefix(&prefix) {
+                    utxo_keys.push(utxo_key.to_string());
+                }
+            }
         }
+
+        Ok(utxo_keys)
     }
 
     /// Add a transaction to the address history
+    /// Uses individual keys for O(1) operations
     pub fn add_tx_to_address_history(&mut self, address_hex: &str, tx_hash_hex: &str) -> Result<()> {
-        let addr_key = Key::from(address_hex.as_bytes());
+        // Key format: address:tx_hash
+        let index_key = format!("{}:{}", address_hex, tx_hash_hex);
+        let key = Key::from(index_key.as_bytes());
 
-        // Get current tx list for this address
-        let mut tx_hashes: Vec<String> = if let Some(value) = self.address_tx_index.get(&addr_key)? {
-            serde_json::from_slice(value.as_ref())?
-        } else {
-            Vec::new()
-        };
-
-        // Add new tx hash if not already present
-        if !tx_hashes.contains(&tx_hash_hex.to_string()) {
-            tx_hashes.push(tx_hash_hex.to_string());
-
-            // Store updated list
-            let value = Value::from(&serde_json::to_vec(&tx_hashes)?);
-            self.address_tx_index.insert(&addr_key, &value)?;
-        }
+        // Store a marker (just 1 byte)
+        self.address_tx_index.insert(&key, &Value::from(&[1u8]))?;
 
         Ok(())
     }
 
     /// Get transaction history for an address
+    /// Uses prefix scan for efficient retrieval
     pub fn get_tx_history_for_address(&self, address_hex: &str) -> Result<Vec<String>> {
-        let addr_key = Key::from(address_hex.as_bytes());
+        let prefix = format!("{}:", address_hex);
+        let mut tx_hashes = Vec::new();
 
-        if let Some(value) = self.address_tx_index.get(&addr_key)? {
-            let tx_hashes: Vec<String> = serde_json::from_slice(value.as_ref())?;
-            Ok(tx_hashes)
-        } else {
-            Ok(Vec::new())
+        // Scan all keys with this address prefix
+        for (key, _value) in self.address_tx_index.scan_prefix(prefix.as_bytes()) {
+            // Key format is "address:tx_hash", extract the tx_hash part
+            if let Ok(key_str) = std::str::from_utf8(key.as_ref()) {
+                if let Some(tx_hash) = key_str.strip_prefix(&prefix) {
+                    tx_hashes.push(tx_hash.to_string());
+                }
+            }
         }
+
+        Ok(tx_hashes)
     }
 }
 

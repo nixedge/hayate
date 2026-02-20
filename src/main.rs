@@ -9,6 +9,7 @@ mod rewards;
 mod indexer;
 mod api;
 mod config;
+mod wallet_stats;
 
 use clap::Parser;
 use tracing::info;
@@ -32,19 +33,23 @@ async fn run_chain_sync(
 
     info!("🔄 Starting chain sync from socket: {}", socket_path);
 
+    // Get wallet IDs for per-wallet tip tracking
+    let wallet_ids = indexer.account_xpubs.read().await.clone();
+
     // Get network storage
     let networks = indexer.networks.read().await;
     let storage = networks.get(&network)
         .ok_or_else(|| anyhow::anyhow!("Network storage not found"))?;
 
-    // Get chain tip for resume point
-    let start_point = if let Some(tip) = storage.get_chain_tip()? {
-        info!("Resuming from slot {}", tip.slot);
+    // Get minimum wallet tip for resume point
+    // This ensures newly added wallets are indexed from their last known tip (or origin)
+    let start_point = if let Some(tip) = storage.get_min_wallet_tip(&wallet_ids)? {
+        info!("Resuming from slot {} (minimum across {} wallets)", tip.slot, wallet_ids.len());
         let hash_bytes: [u8; 32] = tip.hash.try_into()
             .map_err(|_| anyhow::anyhow!("Invalid hash length"))?;
         AmaruPoint::Specific(tip.slot.into(), hash_bytes.into())
     } else {
-        info!("Starting from origin");
+        info!("Starting from origin (new wallets or empty database)");
         AmaruPoint::Origin
     };
 
@@ -55,72 +60,132 @@ async fn run_chain_sync(
     let mut sync = HayateSync::connect_unix(&socket_path, magic, start_point).await?;
     info!("✅ Connected to Cardano node");
 
-    // Create block processor
+    // Create block processor with wallet IDs
     let mut networks = indexer.networks.write().await;
     let storage = networks.remove(&network)
         .ok_or_else(|| anyhow::anyhow!("Network storage not found"))?;
     let mut processor = BlockProcessor::new(storage);
+
+    // Add wallet IDs to processor for per-wallet tip tracking
+    for wallet_id in &wallet_ids {
+        processor.add_wallet_id(wallet_id.clone());
+    }
+
     drop(networks); // Release write lock
 
     info!("🔄 Starting block processing...");
 
-    // Process blocks
-    loop {
-        match sync.request_next().await? {
-            NextResponse::RollForward(block_bytes, _tip) => {
-                // Parse block to get slot and hash
-                let block = MultiEraBlock::decode(&block_bytes)?;
-                let slot = block.slot();
-                let hash = block.hash();
+    // Process blocks - loop until shutdown signal
+    let result: anyhow::Result<()> = loop {
+        tokio::select! {
+            // Handle Ctrl+C for graceful shutdown
+            _ = tokio::signal::ctrl_c() => {
+                info!("🛑 Received shutdown signal, saving tips...");
+                break Ok(());
+            }
 
-                // Process block
-                match processor.process_block(&block_bytes, slot, hash.as_ref()) {
-                    Ok(stats) => {
-                        if stats.tx_count > 0 {
-                            info!(
-                                "Block {} at slot {}: {} txs, {} UTxOs created, {} spent",
-                                hex::encode(&hash.as_ref()[..8]),
-                                slot,
-                                stats.tx_count,
-                                stats.utxos_created,
-                                stats.utxos_spent
-                            );
+            // Process next block
+            next = sync.request_next() => {
+                match next? {
+                    NextResponse::RollForward(block_bytes, _tip) => {
+                        // Parse block to get slot and hash
+                        let block = MultiEraBlock::decode(&block_bytes)?;
+                        let slot = block.slot();
+                        let hash = block.hash();
+
+                        // Process block
+                        match processor.process_block(&block_bytes, slot, hash.as_ref()) {
+                            Ok(_stats) => {
+                                // Only log progress every 1000 blocks to reduce overhead
+                                // The processor already logs every 100 blocks with more detail
+
+                                // Broadcast block update
+                                indexer.broadcast_block(indexer::BlockUpdate {
+                                    network: network.clone(),
+                                    height: 0, // TODO: track height
+                                    slot,
+                                    hash: hash.as_ref().to_vec(),
+                                    tx_hashes: Vec::new(), // TODO: collect tx hashes
+                                });
+                            }
+                            Err(e) => {
+                                tracing::error!("Error processing block at slot {}: {}", slot, e);
+                                continue;
+                            }
                         }
-
-                        // Broadcast block update
-                        indexer.broadcast_block(indexer::BlockUpdate {
-                            network: network.clone(),
-                            height: 0, // TODO: track height
-                            slot,
-                            hash: hash.as_ref().to_vec(),
-                            tx_hashes: Vec::new(), // TODO: collect tx hashes
-                        });
                     }
-                    Err(e) => {
-                        tracing::error!("Error processing block at slot {}: {}", slot, e);
-                        continue;
+                    NextResponse::RollBackward(point, _tip) => {
+                        info!("⚠️  Rollback to {:?}", point);
+                        match point {
+                            PallasPoint::Specific(slot, _) => {
+                                match processor.rollback_to(slot) {
+                                    Ok(count) => info!("✓ Rolled back {} blocks", count),
+                                    Err(e) => tracing::error!("Failed to rollback: {}", e),
+                                }
+                            }
+                            PallasPoint::Origin => {
+                                info!("Rollback to origin requested");
+                                match processor.rollback_to(0) {
+                                    Ok(count) => info!("✓ Rolled back {} blocks to origin", count),
+                                    Err(e) => tracing::error!("Failed to rollback to origin: {}", e),
+                                }
+                            }
+                        }
+                    }
+                    NextResponse::Await => {
+                        info!("Caught up, waiting for new blocks...");
+                        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                     }
                 }
             }
-            NextResponse::RollBackward(point, _tip) => {
-                info!("⚠️  Rollback to {:?}", point);
-                match point {
-                    PallasPoint::Specific(slot, _) => {
-                        match processor.rollback_to(slot) {
-                            Ok(count) => info!("✓ Rolled back {} blocks", count),
-                            Err(e) => tracing::error!("Failed to rollback: {}", e),
-                        }
-                    }
-                    PallasPoint::Origin => {
-                        info!("Rollback to origin requested");
-                        // TODO: Handle rollback to origin
-                    }
-                }
-            }
-            NextResponse::Await => {
-                info!("Caught up, waiting for new blocks...");
-                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
-            }
+        }
+    };
+
+    // Save tips before exiting (whether shutdown, error, or normal exit)
+    info!("💾 Saving final chain tips...");
+    processor.save_current_tips()?;
+
+    result
+}
+
+async fn handle_wallet_command(wallet_cmd: &cli::WalletCommand, args: &Args) -> anyhow::Result<()> {
+    match wallet_cmd {
+        cli::WalletCommand::Stats { wallet } => {
+            // Determine network
+            let network = args.network.as_ref()
+                .and_then(|n| Network::from_str(n))
+                .ok_or_else(|| anyhow::anyhow!("--network is required for wallet commands"))?;
+
+            // Determine database path
+            let db_path = args.db_path.as_ref()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("./hayate-db"));
+
+            // Get and print stats
+            let stats = wallet_stats::get_wallet_stats(db_path, network.clone(), wallet.clone())?;
+            wallet_stats::print_wallet_stats(stats, &network);
+
+            Ok(())
+        }
+        cli::WalletCommand::Utxos { wallet: _ } => {
+            println!("UTxOs command not yet implemented");
+            Ok(())
+        }
+        cli::WalletCommand::Txs { wallet: _ } => {
+            println!("Transactions command not yet implemented");
+            Ok(())
+        }
+    }
+}
+
+async fn handle_config_command(config_cmd: &cli::ConfigCommand) -> anyhow::Result<()> {
+    match config_cmd {
+        cli::ConfigCommand::Generate { output } => {
+            info!("Generating default config at: {}", output);
+            config::HayateConfig::generate_default(output)?;
+            info!("✅ Config file created: {}", output);
+            info!("Edit the file and run: hayate sync --config {}", output);
+            Ok(())
         }
     }
 }
@@ -137,14 +202,18 @@ async fn main() -> anyhow::Result<()> {
         .init();
     
     let args = Args::parse();
-    
-    // Handle config generation
-    if let Some(config_path) = args.generate_config {
-        info!("Generating default config at: {}", config_path);
-        config::HayateConfig::generate_default(&config_path)?;
-        info!("✅ Config file created: {}", config_path);
-        info!("Edit the file and run: hayate --config {}", config_path);
-        return Ok(());
+
+    // Handle commands
+    match &args.command {
+        Some(cli::Command::Wallet { wallet_cmd }) => {
+            return handle_wallet_command(wallet_cmd, &args).await;
+        }
+        Some(cli::Command::Config { config_cmd }) => {
+            return handle_config_command(config_cmd).await;
+        }
+        Some(cli::Command::Sync { .. }) | None => {
+            // Continue with sync (default behavior)
+        }
     }
     
     // Load configuration
@@ -156,15 +225,19 @@ async fn main() -> anyhow::Result<()> {
         config::HayateConfig::default()
     };
     
-    // Apply CLI overrides
-    if let Some(db_path) = args.db_path {
+    // Apply CLI overrides from global args
+    if let Some(db_path) = &args.db_path {
         config.data_dir = PathBuf::from(db_path);
     }
-    if let Some(gap_limit) = args.gap_limit {
-        config.gap_limit = gap_limit;
-    }
-    if let Some(api_bind) = args.api_bind {
-        config.api.bind = api_bind;
+
+    // Apply overrides from Sync command if present
+    if let Some(cli::Command::Sync { gap_limit, api_bind, .. }) = &args.command {
+        if let Some(gap_limit) = gap_limit {
+            config.gap_limit = *gap_limit;
+        }
+        if let Some(api_bind) = api_bind {
+            config.api.bind = api_bind.clone();
+        }
     }
     
     info!("疾風 Hayate starting...");
@@ -176,10 +249,16 @@ async fn main() -> anyhow::Result<()> {
     let indexer = Arc::new(HayateIndexer::new(config.data_dir.clone(), config.gap_limit)?);
 
     // Determine network to use
-    let network = if let Some(network_str) = args.network {
-        Network::from_str(&network_str)
+    let socket = if let Some(cli::Command::Sync { socket, .. }) = &args.command {
+        socket.as_ref()
+    } else {
+        None
+    };
+
+    let network = if let Some(network_str) = &args.network {
+        Network::from_str(network_str)
             .ok_or_else(|| anyhow::anyhow!("Invalid network: {}", network_str))?
-    } else if args.socket.is_some() {
+    } else if socket.is_some() {
         return Err(anyhow::anyhow!("--network is required when using --socket"));
     } else {
         // From config file - use first enabled network
@@ -195,13 +274,32 @@ async fn main() -> anyhow::Result<()> {
     // Add network storage
     indexer.add_network(network.clone(), config.data_dir.clone()).await?;
 
+    // Load wallets from config
+    // TODO: Also check for smart contracts and native tokens once implemented
+    if config.wallets.is_empty() {
+        return Err(anyhow::anyhow!(
+            "Nothing configured to index. Please configure at least one of:\n\
+             - Wallet xpubs (in 'wallets' array)\n\
+             - Smart contracts (coming soon)\n\
+             - Native tokens to track (coming soon)\n\n\
+             Generate a default config with: hayate --generate-config config.toml"
+        ));
+    }
+
+    for wallet_xpub in &config.wallets {
+        info!("Loading wallet: {}", wallet_xpub);
+        indexer.add_account(wallet_xpub.clone()).await?;
+    }
+
+    info!("Loaded {} wallet(s)", config.wallets.len());
+
     // If socket is provided, run in sync mode
-    if let Some(socket_path) = args.socket {
+    if let Some(socket_path) = socket {
         info!("Socket: {}", socket_path);
         info!("Running in sync mode (no API server)");
 
         // Run chain sync (this will block forever)
-        run_chain_sync(indexer, network, socket_path).await?;
+        run_chain_sync(indexer, network, socket_path.clone()).await?;
 
         return Ok(());
     }

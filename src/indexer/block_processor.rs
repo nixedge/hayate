@@ -102,6 +102,9 @@ pub struct BlockProcessor {
     pub blocks_processed: u64,
     pub current_slot: u64,
 
+    // Wallet IDs for per-wallet tip tracking
+    pub wallet_ids: Vec<String>,
+
     // Rollback buffer - keep last K blocks for potential rollback
     rollback_buffer: VecDeque<RollbackInfo>,
     rollback_buffer_size: usize,
@@ -126,9 +129,15 @@ impl BlockProcessor {
             current_epoch: 0,
             blocks_processed: 0,
             current_slot,
+            wallet_ids: Vec::new(),
             rollback_buffer: VecDeque::with_capacity(buffer_size),
             rollback_buffer_size: buffer_size,
         }
+    }
+
+    /// Add a wallet ID for per-wallet tip tracking
+    pub fn add_wallet_id(&mut self, wallet_id: String) {
+        self.wallet_ids.push(wallet_id);
     }
 
     pub fn add_wallet(&mut self, payment_key: Hash<28>, stake_key: Hash<28>) {
@@ -165,7 +174,8 @@ impl BlockProcessor {
 
         // Update epoch tracking
         let epoch = slot_to_epoch(slot);
-        if epoch > self.current_epoch {
+        let epoch_boundary = epoch > self.current_epoch;
+        if epoch_boundary {
             tracing::info!("📅 Epoch boundary: {} → {}", self.current_epoch, epoch);
             self.current_epoch = epoch;
         }
@@ -175,8 +185,6 @@ impl BlockProcessor {
             self.process_transaction(&tx, slot, block_hash, &mut stats, &mut rollback_info)?;
         }
 
-        // Store chain tip
-        self.storage.store_chain_tip(slot, block_hash)?;
         self.current_slot = slot;
         self.blocks_processed += 1;
 
@@ -186,9 +194,15 @@ impl BlockProcessor {
             self.rollback_buffer.pop_front();
         }
 
-        if self.blocks_processed % 100 == 0 {
+        // Only update tips at epoch boundaries to minimize WAL bloat
+        // Tips are also updated on rollbacks and shutdown
+        if epoch_boundary {
+            self.save_current_tips()?;
+        }
+
+        if self.blocks_processed % 1000 == 0 {
             tracing::info!(
-                "Processed {} blocks, current slot: {}, epoch: {}",
+                "Progress: {} blocks, slot {}, epoch {}",
                 self.blocks_processed,
                 slot,
                 epoch
@@ -228,6 +242,25 @@ impl BlockProcessor {
         tracing::info!("✓ Rolled back {} blocks to slot {}", blocks_rolled_back, self.current_slot);
 
         Ok(blocks_rolled_back)
+    }
+
+    /// Save current chain tip and wallet tips
+    /// Should be called at epoch boundaries, rollbacks, and shutdown
+    pub fn save_current_tips(&mut self) -> Result<()> {
+        // Get the current block hash from the most recent block in rollback buffer
+        if let Some(last_block) = self.rollback_buffer.back() {
+            // Store chain tip
+            self.storage.store_chain_tip(last_block.slot, &last_block.block_hash)?;
+
+            // Store per-wallet tips for all tracked wallets
+            for wallet_id in &self.wallet_ids {
+                self.storage.store_wallet_tip(wallet_id, last_block.slot, &last_block.block_hash)?;
+            }
+
+            tracing::info!("💾 Saved tips at slot {}", last_block.slot);
+        }
+
+        Ok(())
     }
 
     /// Roll back a single block using rollback info

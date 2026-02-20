@@ -11,15 +11,20 @@ use std::path::PathBuf;
 pub struct HayateConfig {
     #[serde(default = "default_data_dir")]
     pub data_dir: PathBuf,
-    
+
     #[serde(default = "default_gap_limit")]
     pub gap_limit: u32,
-    
+
     #[serde(default)]
     pub api: ApiConfig,
-    
+
     #[serde(default)]
     pub networks: HashMap<String, NetworkConfig>,
+
+    /// Wallet xpubs to index (account-level extended public keys)
+    /// Can be hex-encoded or bech32-encoded (acct_xvk...)
+    #[serde(default)]
+    pub wallets: Vec<String>,
 }
 
 fn default_data_dir() -> PathBuf {
@@ -133,6 +138,7 @@ impl Default for HayateConfig {
             gap_limit: default_gap_limit(),
             api: ApiConfig::default(),
             networks,
+            wallets: Vec::new(),
         }
     }
 }
