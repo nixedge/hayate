@@ -741,15 +741,18 @@ impl BlockStats {
 
 // Helper functions
 pub fn slot_to_epoch(slot: u64) -> u64 {
-    slot / 432_000 // Cardano epoch = 432,000 slots (5 days)
+    // TODO: This should come from network config or shelley genesis
+    // For now, defaulting to Preview/SanchoNet epoch length (86400)
+    // Mainnet/Preprod use 432000 slots per epoch
+    slot / 86_400
 }
 
 pub fn is_epoch_boundary(slot: u64) -> bool {
-    slot % 432_000 == 0
+    slot % 86_400 == 0
 }
 
 pub fn epoch_to_slot(epoch: u64) -> u64 {
-    epoch * 432_000
+    epoch * 86_400
 }
 
 #[cfg(test)]
