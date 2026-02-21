@@ -761,20 +761,22 @@ mod tests {
 
     #[test]
     fn test_slot_epoch_conversion() {
+        // Using Preview/SanchoNet epoch length (86400)
         assert_eq!(slot_to_epoch(0), 0);
-        assert_eq!(slot_to_epoch(432_000), 1);
-        assert_eq!(slot_to_epoch(864_000), 2);
+        assert_eq!(slot_to_epoch(86_400), 1);
+        assert_eq!(slot_to_epoch(172_800), 2);
 
         assert_eq!(epoch_to_slot(0), 0);
-        assert_eq!(epoch_to_slot(1), 432_000);
-        assert_eq!(epoch_to_slot(2), 864_000);
+        assert_eq!(epoch_to_slot(1), 86_400);
+        assert_eq!(epoch_to_slot(2), 172_800);
     }
 
     #[test]
     fn test_epoch_boundaries() {
+        // Using Preview/SanchoNet epoch length (86400)
         assert!(is_epoch_boundary(0));
-        assert!(is_epoch_boundary(432_000));
+        assert!(is_epoch_boundary(86_400));
         assert!(!is_epoch_boundary(1));
-        assert!(!is_epoch_boundary(432_001));
+        assert!(!is_epoch_boundary(86_401));
     }
 }
