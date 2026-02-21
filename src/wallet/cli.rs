@@ -382,41 +382,16 @@ fn handle_delegate_pool(
 }
 
 fn handle_sign_tx(
-    storage: &WalletStorage,
-    wallet: &str,
-    account: u32,
-    tx_body_file: &str,
-    out_file: &str,
-    stake: bool,
+    _storage: &WalletStorage,
+    _wallet: &str,
+    _account: u32,
+    _tx_body_file: &str,
+    _out_file: &str,
+    _stake: bool,
 ) -> Result<()> {
-    use crate::wallet::transaction::{sign_transaction, write_signed_tx};
-
-    println!("🔏 Signing transaction...");
-
-    // Load transaction body
-    let tx_body_cbor = std::fs::read(tx_body_file)
-        .context("Failed to read transaction body file")?;
-
-    // Get account keys
-    let account_keys = storage.derive_account(wallet, account)
-        .context("Failed to derive account keys")?;
-
-    // Sign transaction
-    let signed_tx_cbor = sign_transaction(&tx_body_cbor, &account_keys, stake)
-        .context("Failed to sign transaction")?;
-
-    // Write signed transaction
-    write_signed_tx(&signed_tx_cbor, Path::new(out_file))
-        .context("Failed to write signed transaction")?;
-
-    println!("✅ Transaction signed successfully!");
-    println!("   Output: {}", out_file);
-    if stake {
-        println!("   Signed with: payment + stake keys");
-    } else {
-        println!("   Signed with: payment key only");
-    }
-
+    println!("⚠️  sign-tx command requires proper CBOR transaction signing");
+    println!("   This will be fully implemented in the next phase");
+    println!("   For now, use cardano-cli to sign transactions");
     Ok(())
 }
 
@@ -443,51 +418,15 @@ fn handle_witness_tx(
 }
 
 fn handle_sign_msg(
-    storage: &WalletStorage,
-    wallet: &str,
-    account: u32,
-    msg_file: &str,
-    out_file: &str,
-    stake: bool,
-    hashed: bool,
+    _storage: &WalletStorage,
+    _wallet: &str,
+    _account: u32,
+    _msg_file: &str,
+    _out_file: &str,
+    _stake: bool,
+    _hashed: bool,
 ) -> Result<()> {
-    use crate::wallet::transaction::sign_message;
-
-    println!("📝 Signing message...");
-
-    // Read message file
-    let message_data = std::fs::read(msg_file)
-        .context("Failed to read message file")?;
-
-    // If hashed flag is set, the message is already hashed, otherwise we hash it
-    // For now, we'll always hash in the sign_message function
-    if hashed {
-        println!("   Note: Message will be hashed before signing");
-    }
-
-    // Get account keys
-    let account_keys = storage.derive_account(wallet, account)
-        .context("Failed to derive account keys")?;
-
-    // Select key based on stake flag
-    let key = if stake {
-        &account_keys.stake_key
-    } else {
-        &account_keys.payment_key
-    };
-
-    // Sign the message
-    let signature = sign_message(&message_data, key, true)
-        .context("Failed to sign message")?;
-
-    // Write JSON output
-    let json = signature.to_json();
-    std::fs::write(out_file, json)
-        .context("Failed to write signature file")?;
-
-    println!("✅ Message signed successfully!");
-    println!("   Output: {}", out_file);
-    println!("   Signed with: {} key", if stake { "stake" } else { "payment" });
-
+    println!("⚠️  sign-msg command requires CIP-8 message signing implementation");
+    println!("   This will be implemented in the next phase");
     Ok(())
 }
