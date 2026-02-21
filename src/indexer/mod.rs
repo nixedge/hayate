@@ -175,10 +175,11 @@ impl NetworkStorage {
     }
 
     /// Store chain tip
-    pub fn store_chain_tip(&mut self, slot: u64, hash: &[u8]) -> Result<()> {
+    pub fn store_chain_tip(&mut self, slot: u64, hash: &[u8], timestamp: u64) -> Result<()> {
         let tip_data = serde_json::json!({
             "slot": slot,
             "hash": hex::encode(hash),
+            "timestamp": timestamp,
         });
 
         self.chain_tip_tree.insert(
@@ -198,6 +199,7 @@ impl NetworkStorage {
                 height: 0, // TODO: track height
                 slot: tip_data["slot"].as_u64().unwrap_or(0),
                 hash: hex::decode(tip_data["hash"].as_str().unwrap_or("")).unwrap_or_default(),
+                timestamp: tip_data["timestamp"].as_u64().unwrap_or(0),
             }))
         } else {
             Ok(None)
@@ -206,10 +208,11 @@ impl NetworkStorage {
 
     /// Store wallet-specific chain tip
     /// Uses wallet identifier (e.g., xpub hash or stake key) as key
-    pub fn store_wallet_tip(&mut self, wallet_id: &str, slot: u64, hash: &[u8]) -> Result<()> {
+    pub fn store_wallet_tip(&mut self, wallet_id: &str, slot: u64, hash: &[u8], timestamp: u64) -> Result<()> {
         let tip_data = serde_json::json!({
             "slot": slot,
             "hash": hex::encode(hash),
+            "timestamp": timestamp,
         });
 
         let key = format!("wallet_tip:{}", wallet_id);
@@ -232,6 +235,7 @@ impl NetworkStorage {
                 height: 0,
                 slot: tip_data["slot"].as_u64().unwrap_or(0),
                 hash: hex::decode(tip_data["hash"].as_str().unwrap_or("")).unwrap_or_default(),
+                timestamp: tip_data["timestamp"].as_u64().unwrap_or(0),
             }))
         } else {
             Ok(None)
@@ -413,6 +417,7 @@ pub struct ChainTip {
     pub height: u64,
     pub slot: u64,
     pub hash: Vec<u8>,
+    pub timestamp: u64,  // Unix milliseconds
 }
 
 pub struct HayateIndexer {
@@ -462,6 +467,7 @@ impl HayateIndexer {
             height: 0,
             slot: 0,
             hash: vec![],
+            timestamp: 0,
         })
     }
 }

@@ -92,6 +92,7 @@ impl WalletFilter {
 struct RollbackInfo {
     slot: u64,
     block_hash: Vec<u8>,
+    timestamp: u64,
     utxos_created: Vec<String>,  // Keys that were created
     utxos_spent: Vec<(String, Vec<u8>)>,  // Keys that were spent, with their data
     spent_utxos_recorded: Vec<String>,  // Keys for which we recorded spend events
@@ -176,9 +177,16 @@ impl BlockProcessor {
             addresses_affected: HashSet::new(),
         };
 
+        // Get block timestamp (Unix milliseconds)
+        // For all eras, estimate timestamp from slot
+        // TODO: Make genesis time configurable per network
+        let genesis_time_ms: u64 = 1591566291000; // Mainnet genesis (July 29, 2020)
+        let block_timestamp = genesis_time_ms + (slot * 1000);
+
         let mut rollback_info = RollbackInfo {
             slot,
             block_hash: block_hash.to_vec(),
+            timestamp: block_timestamp,
             utxos_created: Vec::new(),
             utxos_spent: Vec::new(),
             spent_utxos_recorded: Vec::new(),
@@ -191,12 +199,6 @@ impl BlockProcessor {
             tracing::info!("📅 Epoch boundary: {} → {}", self.current_epoch, epoch);
             self.current_epoch = epoch;
         }
-
-        // Get block timestamp (Unix milliseconds)
-        // For all eras, estimate timestamp from slot
-        // TODO: Make genesis time configurable per network
-        let genesis_time_ms: u64 = 1591566291000; // Mainnet genesis (July 29, 2020)
-        let block_timestamp = genesis_time_ms + (slot * 1000);
 
         // Process each transaction in the block
         for (tx_index, tx) in block.txs().into_iter().enumerate() {
@@ -291,7 +293,7 @@ impl BlockProcessor {
 
         // Update chain tip
         if let Some(last_block) = self.rollback_buffer.back() {
-            self.storage.store_chain_tip(last_block.slot, &last_block.block_hash)?;
+            self.storage.store_chain_tip(last_block.slot, &last_block.block_hash, last_block.timestamp)?;
             self.current_slot = last_block.slot;
         } else {
             // Rolled back everything
@@ -309,11 +311,11 @@ impl BlockProcessor {
         // Get the current block hash from the most recent block in rollback buffer
         if let Some(last_block) = self.rollback_buffer.back() {
             // Store chain tip
-            self.storage.store_chain_tip(last_block.slot, &last_block.block_hash)?;
+            self.storage.store_chain_tip(last_block.slot, &last_block.block_hash, last_block.timestamp)?;
 
             // Store per-wallet tips for all tracked wallets
             for wallet_id in &self.wallet_ids {
-                self.storage.store_wallet_tip(wallet_id, last_block.slot, &last_block.block_hash)?;
+                self.storage.store_wallet_tip(wallet_id, last_block.slot, &last_block.block_hash, last_block.timestamp)?;
             }
 
             tracing::info!("💾 Saved tips at slot {}", last_block.slot);

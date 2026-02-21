@@ -168,6 +168,7 @@ impl QueryService for QueryServiceImpl {
                 height: 0,
                 slot: 0,
                 hash: vec![],
+                timestamp: 0,
             });
 
         Ok(Response::new(ReadUtxosResponse {
@@ -238,6 +239,7 @@ impl QueryService for QueryServiceImpl {
                 height: 0,
                 slot: 0,
                 hash: vec![],
+                timestamp: 0,
             });
 
         Ok(Response::new(ReadParamsResponse {
@@ -257,12 +259,14 @@ impl QueryService for QueryServiceImpl {
                 height: 0,
                 slot: 0,
                 hash: vec![],
+                timestamp: 0,
             });
 
         Ok(Response::new(GetChainTipResponse {
             height: tip.height,
             slot: tip.slot,
             hash: tip.hash,
+            timestamp: tip.timestamp,
         }))
     }
 
