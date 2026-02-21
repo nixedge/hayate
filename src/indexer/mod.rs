@@ -108,6 +108,10 @@ pub struct NetworkStorage {
     // This enables efficient slot range queries for ReadUtxoEvents RPC
     pub block_events_tree: LsmTree,
 
+    // Block hash index for block-by-hash queries
+    // Key: block_hash (32 bytes), Value: JSON { slot, timestamp }
+    pub block_hash_index: LsmTree,
+
     // Track which epoch we started indexing from
     pub indexing_start_epoch: u64,
 }
@@ -130,6 +134,7 @@ impl NetworkStorage {
         let asset_tx_index = LsmTree::open(network_path.join("asset_txs"), LsmConfig::default())?;
         let spent_utxo_index = LsmTree::open(network_path.join("spent_utxos"), LsmConfig::default())?;
         let block_events_tree = LsmTree::open(network_path.join("block_events"), LsmConfig::default())?;
+        let block_hash_index = LsmTree::open(network_path.join("block_hash_index"), LsmConfig::default())?;
 
         let start_epoch = 0;
         let rewards_tracker = RewardsTracker::open(network_path.join("rewards"), start_epoch)?;
@@ -149,6 +154,7 @@ impl NetworkStorage {
             asset_tx_index,
             spent_utxo_index,
             block_events_tree,
+            block_hash_index,
             indexing_start_epoch: start_epoch,
         })
     }
@@ -272,6 +278,33 @@ impl NetworkStorage {
         }
 
         Ok(min_tip)
+    }
+
+    /// Store block metadata in the block hash index
+    pub fn store_block_metadata(&mut self, block_hash: &[u8], slot: u64, timestamp: u64) -> Result<()> {
+        let metadata = serde_json::json!({
+            "slot": slot,
+            "timestamp": timestamp,
+        });
+
+        self.block_hash_index.insert(
+            &Key::from(block_hash),
+            &Value::from(&serde_json::to_vec(&metadata)?),
+        )?;
+
+        Ok(())
+    }
+
+    /// Get block metadata by hash
+    pub fn get_block_metadata(&self, block_hash: &[u8]) -> Result<Option<(u64, u64)>> {
+        if let Some(value) = self.block_hash_index.get(&Key::from(block_hash))? {
+            let metadata: serde_json::Value = serde_json::from_slice(value.as_ref())?;
+            let slot = metadata["slot"].as_u64().unwrap_or(0);
+            let timestamp = metadata["timestamp"].as_u64().unwrap_or(0);
+            Ok(Some((slot, timestamp)))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Add a UTxO to the address index

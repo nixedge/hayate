@@ -19,17 +19,30 @@ use query::{
     GetChainTipRequest, GetChainTipResponse,
     GetTxHistoryRequest, GetTxHistoryResponse,
     ReadUtxoEventsRequest, ReadUtxoEventsResponse,
+    GetBlockByHashRequest, GetBlockByHashResponse,
 };
 
 pub struct QueryServiceImpl {
     storage: Arc<RwLock<NetworkStorage>>,
+    socket_path: Option<String>,
+    magic: u64,
 }
 
 impl QueryServiceImpl {
     #[allow(dead_code)]
     pub fn new(storage: NetworkStorage) -> Self {
         Self {
-            storage: Arc::new(RwLock::new(storage))
+            storage: Arc::new(RwLock::new(storage)),
+            socket_path: None,
+            magic: 0,
+        }
+    }
+
+    pub fn new_with_node(storage: NetworkStorage, socket_path: String, magic: u64) -> Self {
+        Self {
+            storage: Arc::new(RwLock::new(storage)),
+            socket_path: Some(socket_path),
+            magic,
         }
     }
 }
@@ -400,6 +413,83 @@ impl QueryService for QueryServiceImpl {
 
         Ok(Response::new(ReadUtxoEventsResponse {
             events,
+        }))
+    }
+
+    async fn get_block_by_hash(
+        &self,
+        request: Request<GetBlockByHashRequest>,
+    ) -> Result<Response<GetBlockByHashResponse>, Status> {
+        let req = request.into_inner();
+
+        tracing::debug!("GetBlockByHash for hash: {}", hex::encode(&req.hash));
+
+        // Look up block metadata in the index
+        let storage = self.storage.read().await;
+        let metadata = storage.get_block_metadata(&req.hash)
+            .map_err(|e| Status::internal(format!("Failed to query block index: {}", e)))?;
+
+        let (slot, timestamp) = match metadata {
+            Some((s, t)) => (s, t),
+            None => {
+                return Err(Status::not_found(format!(
+                    "Block not found: {}",
+                    hex::encode(&req.hash)
+                )));
+            }
+        };
+
+        drop(storage);  // Release storage lock before network call
+
+        // Connect to node and fetch the block
+        let socket_path = self.socket_path.as_ref()
+            .ok_or_else(|| Status::unavailable("Node socket path not configured"))?;
+
+        tracing::debug!("Fetching block at slot {} from node", slot);
+
+        // Create on-demand N2C connection
+        use crate::chain_sync::HayateSync;
+        use amaru_kernel::{Point, Slot, HeaderHash};
+
+        // Convert hash to HeaderHash
+        let hash_array: [u8; 32] = req.hash.clone().try_into()
+            .map_err(|_| Status::invalid_argument("Invalid block hash length (must be 32 bytes)"))?;
+        let header_hash = HeaderHash::from(hash_array);
+
+        let start_point = Point::Specific(Slot::from(slot), header_hash);
+
+        let mut client = HayateSync::connect_unix(socket_path, self.magic, start_point)
+            .await
+            .map_err(|e| Status::unavailable(format!("Failed to connect to node: {}", e)))?;
+
+        // Request the next block (which should be our target block)
+        let response = client.request_next_block()
+            .await
+            .map_err(|e| Status::internal(format!("Failed to request block: {}", e)))?;
+
+        let block_cbor = match response {
+            Some(pallas_network::miniprotocols::chainsync::NextResponse::RollForward(content, _tip)) => {
+                // BlockContent is a tuple-like struct, access the first field which is the cbor bytes
+                content.0.to_vec()
+            }
+            Some(pallas_network::miniprotocols::chainsync::NextResponse::RollBackward(_point, _tip)) => {
+                return Err(Status::internal("Unexpected rollback response"));
+            }
+            Some(pallas_network::miniprotocols::chainsync::NextResponse::Await) => {
+                return Err(Status::internal("Node has no more blocks (unexpected Await)"));
+            }
+            None => {
+                return Err(Status::internal("No block returned from node"));
+            }
+        };
+
+        tracing::debug!("Fetched block: {} bytes", block_cbor.len());
+
+        Ok(Response::new(GetBlockByHashResponse {
+            block_cbor,
+            slot,
+            hash: req.hash,
+            timestamp,
         }))
     }
 }

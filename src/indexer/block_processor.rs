@@ -246,6 +246,9 @@ impl BlockProcessor {
             }
         }
 
+        // Store block metadata in the block hash index for GetBlockByHash queries
+        self.storage.store_block_metadata(block_hash, slot, block_timestamp)?;
+
         self.current_slot = slot;
         self.blocks_processed += 1;
 
