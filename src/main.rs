@@ -87,6 +87,7 @@ async fn run_chain_sync(
     info!("🔄 Starting block processing...");
 
     // Process blocks - loop until shutdown signal
+    let mut awaiting = false;
     let result: anyhow::Result<()> = loop {
         tokio::select! {
             // Handle Ctrl+C for graceful shutdown
@@ -96,9 +97,10 @@ async fn run_chain_sync(
             }
 
             // Process next block
-            next = sync.request_next() => {
+            next = sync.request_next(), if !awaiting => {
                 match next? {
                     NextResponse::RollForward(block_bytes, _tip) => {
+                        awaiting = false;
                         // Parse block to get slot and hash
                         let block = MultiEraBlock::decode(&block_bytes)?;
                         let slot = block.slot();
@@ -126,6 +128,7 @@ async fn run_chain_sync(
                         }
                     }
                     NextResponse::RollBackward(point, _tip) => {
+                        awaiting = false;
                         info!("⚠️  Rollback to {:?}", point);
                         match point {
                             PallasPoint::Specific(slot, _) => {
@@ -145,6 +148,7 @@ async fn run_chain_sync(
                     }
                     NextResponse::Await => {
                         info!("Caught up, waiting for new blocks...");
+                        awaiting = true;
                         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
                     }
                 }

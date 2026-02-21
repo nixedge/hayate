@@ -123,9 +123,16 @@ async fn main() -> Result<()> {
 
     info!("🔄 Starting block processing...");
 
+    let mut awaiting = false;
     loop {
+        if awaiting {
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            continue;
+        }
+
         match sync.request_next().await? {
             NextResponse::RollForward(block_bytes, _tip) => {
+                awaiting = false;
                 // Parse block using pallas
                 match parse_block_with_nonce(&block_bytes) {
                     Ok((slot, block_hash, tx_count, vrf_output_opt)) => {
@@ -231,12 +238,13 @@ async fn main() -> Result<()> {
                 }
             }
             NextResponse::RollBackward(point, _tip) => {
+                awaiting = false;
                 info!("⚠️  Rollback to {:?}", point);
                 // TODO: Implement rollback logic
             }
             NextResponse::Await => {
                 info!("Caught up, waiting for new blocks...");
-                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                awaiting = true;
             }
         }
     }
