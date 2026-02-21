@@ -94,6 +94,7 @@ struct RollbackInfo {
     block_hash: Vec<u8>,
     utxos_created: Vec<String>,  // Keys that were created
     utxos_spent: Vec<(String, Vec<u8>)>,  // Keys that were spent, with their data
+    spent_utxos_recorded: Vec<String>,  // Keys for which we recorded spend events
 }
 
 pub struct BlockProcessor {
@@ -180,6 +181,7 @@ impl BlockProcessor {
             block_hash: block_hash.to_vec(),
             utxos_created: Vec::new(),
             utxos_spent: Vec::new(),
+            spent_utxos_recorded: Vec::new(),
         };
 
         // Update epoch tracking
@@ -190,9 +192,56 @@ impl BlockProcessor {
             self.current_epoch = epoch;
         }
 
+        // Get block timestamp (Unix milliseconds)
+        // For all eras, estimate timestamp from slot
+        // TODO: Make genesis time configurable per network
+        let genesis_time_ms: u64 = 1591566291000; // Mainnet genesis (July 29, 2020)
+        let block_timestamp = genesis_time_ms + (slot * 1000);
+
         // Process each transaction in the block
-        for tx in block.txs() {
-            self.process_transaction(&tx, slot, block_hash, &mut stats, &mut rollback_info)?;
+        for (tx_index, tx) in block.txs().into_iter().enumerate() {
+            self.process_transaction(&tx, slot, block_hash, tx_index as u32, block_timestamp, &mut stats, &mut rollback_info)?;
+        }
+
+        // Persist block events for ReadUtxoEvents RPC queries
+        let mut event_index = 0u64;
+
+        // Write CREATED events
+        for utxo_key in &rollback_info.utxos_created {
+            let key = Key::from(utxo_key.as_bytes());
+            if let Some(utxo_data) = self.storage.utxo_tree.get(&key)? {
+                let event_key = format!("slot#{:020}#{:010}", slot, event_index);
+                let event_data = serde_json::json!({
+                    "event_type": "CREATED",
+                    "utxo_key": utxo_key,
+                    "utxo_data": serde_json::from_slice::<serde_json::Value>(utxo_data.as_ref()).ok(),
+                });
+                let event_bytes = serde_json::to_vec(&event_data)?;
+                self.storage.block_events_tree.insert(
+                    &Key::from(event_key.as_bytes()),
+                    &Value::from(event_bytes.as_slice())
+                )?;
+                event_index += 1;
+            }
+        }
+
+        // Write SPENT events
+        for utxo_key in &rollback_info.spent_utxos_recorded {
+            let key = Key::from(utxo_key.as_bytes());
+            if let Some(spend_data) = self.storage.spent_utxo_index.get(&key)? {
+                let event_key = format!("slot#{:020}#{:010}", slot, event_index);
+                let event_data = serde_json::json!({
+                    "event_type": "SPENT",
+                    "utxo_key": utxo_key,
+                    "spend_data": serde_json::from_slice::<serde_json::Value>(spend_data.as_ref()).ok(),
+                });
+                let event_bytes = serde_json::to_vec(&event_data)?;
+                self.storage.block_events_tree.insert(
+                    &Key::from(event_key.as_bytes()),
+                    &Value::from(event_bytes.as_slice())
+                )?;
+                event_index += 1;
+            }
         }
 
         self.current_slot = slot;
@@ -298,6 +347,27 @@ impl BlockProcessor {
             }
         }
 
+        // Remove recorded spend events
+        for utxo_key in &info.spent_utxos_recorded {
+            let key = Key::from(utxo_key.as_bytes());
+            self.storage.spent_utxo_index.delete(&key)?;
+        }
+
+        // Delete block events for this slot
+        // We don't know exactly how many events there are, so we try deleting up to a reasonable limit
+        for event_index in 0..100000u64 {
+            let event_key = format!("slot#{:020}#{:010}", info.slot, event_index);
+            let key = Key::from(event_key.as_bytes());
+
+            // Try to delete - if key doesn't exist, delete is a no-op
+            if self.storage.block_events_tree.get(&key)?.is_some() {
+                self.storage.block_events_tree.delete(&key)?;
+            } else {
+                // No more events for this slot
+                break;
+            }
+        }
+
         // Delete created UTxOs
         for utxo_key in &info.utxos_created {
             let key = Key::from(utxo_key.as_bytes());
@@ -331,6 +401,8 @@ impl BlockProcessor {
         tx: &MultiEraTx,
         slot: u64,
         block_hash: &[u8],
+        tx_index: u32,
+        block_timestamp: u64,
         stats: &mut BlockStats,
         rollback_info: &mut RollbackInfo,
     ) -> Result<()> {
@@ -341,13 +413,13 @@ impl BlockProcessor {
 
         // Process inputs (spend UTxOs)
         for input in tx.inputs() {
-            self.process_input(&input, &tx_hash, stats, rollback_info)?;
+            self.process_input(&input, &tx_hash, slot, block_hash, tx_index, block_timestamp, stats, rollback_info)?;
         }
 
         // Process outputs (create UTxOs)
         let outputs = tx.outputs();
         for output_idx in 0..outputs.len() {
-            self.process_output(&outputs[output_idx], &tx_hash, output_idx, slot, block_hash, stats, rollback_info)?;
+            self.process_output(&outputs[output_idx], &tx_hash, output_idx, slot, block_hash, tx_index, block_timestamp, stats, rollback_info)?;
         }
 
         // Add transaction to history for all affected addresses
@@ -371,7 +443,11 @@ impl BlockProcessor {
     fn process_input(
         &mut self,
         input: &pallas_traverse::MultiEraInput,
-        _tx_hash: &Hash<32>,
+        spending_tx_hash: &Hash<32>,
+        slot: u64,
+        block_hash: &[u8],
+        tx_index: u32,
+        block_timestamp: u64,
         stats: &mut BlockStats,
         rollback_info: &mut RollbackInfo,
     ) -> Result<()> {
@@ -403,11 +479,27 @@ impl BlockProcessor {
                 }
             }
 
+            // Record spend event before deleting the UTxO
+            let spend_event = serde_json::json!({
+                "spent_at_slot": slot,
+                "spent_at_block_hash": hex::encode(block_hash),
+                "spent_at_tx_index": tx_index,
+                "spent_at_tx_hash": hex::encode(spending_tx_hash.as_ref()),
+                "spent_at_block_timestamp": block_timestamp,
+            });
+
+            let spend_event_bytes = serde_json::to_vec(&spend_event)?;
+            let spend_event_value = Value::from(spend_event_bytes.as_slice());
+            self.storage.spent_utxo_index.insert(&key, &spend_event_value)?;
+
+            // Save spend event for rollback (so we can remove it if we rollback)
+            rollback_info.spent_utxos_recorded.push(utxo_key.clone());
+
             // Delete the UTxO
             self.storage.utxo_tree.delete(&key)?;
             stats.utxos_spent += 1;
 
-            tracing::debug!("Spent UTxO: {}", utxo_key);
+            tracing::debug!("Spent UTxO: {} by tx {}", utxo_key, hex::encode(spending_tx_hash.as_ref()));
         }
 
         Ok(())
@@ -421,6 +513,8 @@ impl BlockProcessor {
         output_idx: usize,
         slot: u64,
         block_hash: &[u8],
+        tx_index: u32,
+        block_timestamp: u64,
         stats: &mut BlockStats,
         rollback_info: &mut RollbackInfo,
     ) -> Result<()> {
@@ -503,6 +597,8 @@ impl BlockProcessor {
             "amount": lovelace,
             "slot": slot,
             "block_hash": hex::encode(block_hash),
+            "tx_index": tx_index,
+            "block_timestamp": block_timestamp,
         });
 
         // Add optional fields only if present

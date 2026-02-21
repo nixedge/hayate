@@ -20,6 +20,9 @@ service QueryService {
 
   // Get transaction history for an address
   rpc GetTxHistory(GetTxHistoryRequest) returns (GetTxHistoryResponse);
+
+  // Get UTxO creation and spending events in a block range
+  rpc ReadUtxoEvents(ReadUtxoEventsRequest) returns (ReadUtxoEventsResponse);
 }
 
 message ReadUtxosRequest {
@@ -67,6 +70,12 @@ message Utxo {
   repeated Asset assets = 5;
   bytes datum_hash = 6;
   bytes datum = 7;
+
+  // Creation metadata (for tracking when/where UTxO was created)
+  uint64 created_at_slot = 8;
+  bytes created_at_block_hash = 9;
+  uint32 created_at_tx_index = 10;
+  uint64 created_at_block_timestamp = 11;  // Unix milliseconds
 }
 
 message Asset {
@@ -82,4 +91,37 @@ message GetTxHistoryRequest {
 
 message GetTxHistoryResponse {
   repeated bytes tx_hashes = 1;  // Transaction hashes
+}
+
+// Query UTxO events in a block range
+message ReadUtxoEventsRequest {
+  uint64 start_slot = 1;  // Start slot (inclusive)
+  uint64 end_slot = 2;    // End slot (inclusive)
+  repeated bytes addresses = 3;  // Optional: filter by addresses
+  uint32 max_events = 4;  // Maximum number of events to return (0 = all)
+}
+
+message ReadUtxoEventsResponse {
+  repeated UtxoEvent events = 1;
+}
+
+message UtxoEvent {
+  enum EventType {
+    CREATED = 0;  // UTxO was created
+    SPENT = 1;    // UTxO was spent
+  }
+
+  EventType event_type = 1;
+  bytes tx_hash = 2;  // Transaction hash that created or spent the UTxO
+  uint32 output_index = 3;  // Output index (for UTxO identification)
+  uint64 slot = 4;
+  bytes block_hash = 5;
+  uint32 tx_index = 6;
+  uint64 block_timestamp = 7;  // Unix milliseconds
+
+  // UTxO data (only present for CREATED events)
+  Utxo utxo = 8;
+
+  // Spending transaction hash (only present for SPENT events)
+  bytes spent_by_tx_hash = 9;
 }

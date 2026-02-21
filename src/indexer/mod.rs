@@ -99,6 +99,15 @@ pub struct NetworkStorage {
     // Asset -> tx hashes: "policy_id_hex:asset_name_hex" -> JSON array of tx hashes
     pub asset_tx_index: LsmTree,
 
+    // Spent UTxO tracking: utxo_key -> spend event JSON
+    // Key: "tx_hash#index", Value: { spent_at_slot, spent_at_block_hash, spent_at_tx_index, spent_at_tx_hash, spent_at_block_timestamp, spent_by_address }
+    pub spent_utxo_index: LsmTree,
+
+    // Block events for range queries (CREATE and SPEND events)
+    // Key: "slot#{slot:020}#{event_index:010}", Value: JSON event data
+    // This enables efficient slot range queries for ReadUtxoEvents RPC
+    pub block_events_tree: LsmTree,
+
     // Track which epoch we started indexing from
     pub indexing_start_epoch: u64,
 }
@@ -119,6 +128,8 @@ impl NetworkStorage {
         let address_tx_index = LsmTree::open(network_path.join("address_txs"), LsmConfig::default())?;
         let policy_tx_index = LsmTree::open(network_path.join("policy_txs"), LsmConfig::default())?;
         let asset_tx_index = LsmTree::open(network_path.join("asset_txs"), LsmConfig::default())?;
+        let spent_utxo_index = LsmTree::open(network_path.join("spent_utxos"), LsmConfig::default())?;
+        let block_events_tree = LsmTree::open(network_path.join("block_events"), LsmConfig::default())?;
 
         let start_epoch = 0;
         let rewards_tracker = RewardsTracker::open(network_path.join("rewards"), start_epoch)?;
@@ -136,6 +147,8 @@ impl NetworkStorage {
             address_tx_index,
             policy_tx_index,
             asset_tx_index,
+            spent_utxo_index,
+            block_events_tree,
             indexing_start_epoch: start_epoch,
         })
     }
