@@ -315,8 +315,19 @@ async fn main() -> anyhow::Result<()> {
 
     // No socket provided - run in API-only mode
     info!("Running in API-only mode (reading from existing DB)");
+
+    // Get socket path from network config (for GetBlockByHash support)
+    let socket_path = config.networks.get(network.as_str())
+        .and_then(|cfg| cfg.socket_path.as_ref())
+        .map(|p| p.to_string_lossy().to_string());
+
+    if socket_path.is_none() {
+        info!("⚠️  No socket_path configured for {} - GetBlockByHash will not be available", network.as_str());
+        info!("💡 Add socket_path to network config to enable block-by-hash queries");
+    }
+
     info!("🚀 Starting UTxORPC server on {}...", config.api.bind);
-    api::start_utxorpc_server(indexer, config.api.bind).await?;
+    api::start_utxorpc_server(indexer, config.api.bind, network, socket_path).await?;
 
     Ok(())
 }
