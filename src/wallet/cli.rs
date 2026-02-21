@@ -5,16 +5,20 @@ use crate::wallet::{
     WalletStorage,
     mnemonic::{generate_mnemonic, normalize_mnemonic},
     derivation::{Network, derive_payment_address},
+    transaction::{TransactionBuilder, sign_transaction, write_tx_body, write_signed_tx},
+    utxorpc_client::WalletUtxorpcClient,
 };
 use crate::gpg::Gpg;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use anyhow::{Result, Context};
+use pallas_addresses::Address;
 
 /// Handle wallet commands
 pub async fn handle_wallet_command(
     wallet_cmd: &WalletCommand,
     wallet_dir: PathBuf,
+    utxorpc_endpoint: Option<String>,
 ) -> Result<()> {
     // Create wallet storage
     let storage = WalletStorage::new(wallet_dir)?;
@@ -58,19 +62,19 @@ pub async fn handle_wallet_command(
 
         // Transaction commands
         WalletCommand::SendTx { wallet, account, address, amount, fee, out_file, multiasset, ttl, sign } => {
-            handle_send_tx(&storage, wallet, *account, address, *amount, *fee, out_file, *multiasset, *ttl, *sign)?;
+            handle_send_tx(&storage, wallet, *account, address, *amount, *fee, out_file, *multiasset, *ttl, *sign, utxorpc_endpoint.as_deref()).await?;
         }
 
         WalletCommand::DrainTx { wallet, account, address, fee, out_file, multiasset, rewards, ttl, sign } => {
-            handle_drain_tx(&storage, wallet, *account, address, *fee, out_file, *multiasset, *rewards, *ttl, *sign)?;
+            handle_drain_tx(&storage, wallet, *account, address, *fee, out_file, *multiasset, *rewards, *ttl, *sign, utxorpc_endpoint.as_deref()).await?;
         }
 
         WalletCommand::StakeRegistrationTx { wallet, account, fee, out_file, deposit, ttl, sign } => {
-            handle_stake_registration(&storage, wallet, *account, *fee, out_file, *deposit, *ttl, *sign)?;
+            handle_stake_registration(&storage, wallet, *account, *fee, out_file, *deposit, *ttl, *sign).await?;
         }
 
         WalletCommand::DelegatePoolTx { wallet, account, pool_id, fee, out_file, ttl, sign } => {
-            handle_delegate_pool(&storage, wallet, *account, pool_id, *fee, out_file, *ttl, *sign)?;
+            handle_delegate_pool(&storage, wallet, *account, pool_id, *fee, out_file, *ttl, *sign).await?;
         }
 
         WalletCommand::SignTx { wallet, account, tx_body_file, out_file, stake } => {
@@ -316,42 +320,225 @@ fn format_timestamp(timestamp: u64) -> String {
 
 // Transaction command handlers
 
-fn handle_send_tx(
-    _storage: &WalletStorage,
-    _wallet: &str,
-    _account: u32,
-    _address: &str,
-    _amount: u64,
-    _fee: u64,
-    _out_file: &str,
+async fn handle_send_tx(
+    storage: &WalletStorage,
+    wallet: &str,
+    account: u32,
+    address: &str,
+    amount: u64,
+    fee: u64,
+    out_file: &str,
     _multiasset: bool,
-    _ttl: Option<u64>,
-    _sign: bool,
+    ttl: Option<u64>,
+    sign: bool,
+    utxorpc_endpoint: Option<&str>,
 ) -> Result<()> {
-    println!("⚠️  send-tx command requires UTxORPC integration");
-    println!("   This will be implemented in the next phase");
-    println!("   For now, use cardano-cli to build transactions");
+    println!("🔨 Building transaction...");
+
+    // Get UTxORPC endpoint
+    let endpoint = utxorpc_endpoint
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "http://127.0.0.1:50051".to_string());
+
+    // Connect to UTxORPC
+    let mut client = WalletUtxorpcClient::connect(endpoint)
+        .await
+        .context("Failed to connect to UTxORPC endpoint")?;
+
+    // Parse recipient address
+    let recipient_addr = Address::from_bech32(address)
+        .context("Invalid recipient address")?;
+    let recipient_bytes = recipient_addr.to_vec();
+
+    // Load wallet metadata and derive account
+    let metadata = storage.load_metadata(wallet)
+        .context("Failed to load wallet")?;
+    let network = parse_network(&metadata.network)?;
+    let account_keys = storage.derive_account(wallet, account)
+        .context("Failed to derive account keys")?;
+
+    // Derive first 20 payment addresses to check for UTxOs
+    let mut payment_addresses = Vec::new();
+    for i in 0..20 {
+        let addr = derive_payment_address(
+            &account_keys.payment_key,
+            i,
+            &account_keys.stake_key,
+            network,
+        ).context("Failed to derive payment address")?;
+
+        let parsed_addr = Address::from_bech32(&addr)
+            .context("Failed to parse derived address")?;
+        payment_addresses.push(parsed_addr.to_vec());
+    }
+
+    println!("📡 Querying UTxOs from {} addresses...", payment_addresses.len());
+
+    // Query UTxOs
+    let utxos = client.query_utxos(payment_addresses.clone())
+        .await
+        .context("Failed to query UTxOs")?;
+
+    if utxos.is_empty() {
+        anyhow::bail!("No UTxOs found for this wallet");
+    }
+
+    println!("✅ Found {} UTxO(s)", utxos.len());
+
+    // Build transaction
+    let mut builder = TransactionBuilder::new(payment_addresses[0].clone());
+    builder.add_utxos(utxos);
+    builder.add_output(recipient_bytes, amount, Vec::new());
+    builder.set_fee(fee);
+    if let Some(ttl_value) = ttl {
+        builder.set_ttl(ttl_value);
+    }
+
+    let (tx_body_cbor, selected_utxos) = builder.build()
+        .context("Failed to build transaction")?;
+
+    println!("✅ Transaction built successfully");
+    println!("   Selected {} UTxO(s) as inputs", selected_utxos.len());
+
+    // Write transaction body
+    if sign {
+        // Sign the transaction
+        println!("✍️  Signing transaction...");
+        let signed_tx = sign_transaction(&tx_body_cbor, &account_keys, false)
+            .context("Failed to sign transaction")?;
+
+        write_signed_tx(&signed_tx, out_file)
+            .context("Failed to write signed transaction")?;
+
+        println!("✅ Signed transaction written to: {}", out_file);
+        println!("   Submit with: cardano-cli transaction submit --tx-file {}", out_file);
+    } else {
+        write_tx_body(&tx_body_cbor, out_file)
+            .context("Failed to write transaction body")?;
+
+        println!("✅ Transaction body written to: {}", out_file);
+        println!("   Sign with: hayate wallet sign-tx --wallet {} --tx-body-file {} --out-file {}.signed",
+                 wallet, out_file, out_file);
+    }
+
     Ok(())
 }
 
-fn handle_drain_tx(
-    _storage: &WalletStorage,
-    _wallet: &str,
-    _account: u32,
-    _address: &str,
-    _fee: u64,
-    _out_file: &str,
+async fn handle_drain_tx(
+    storage: &WalletStorage,
+    wallet: &str,
+    account: u32,
+    address: &str,
+    fee: u64,
+    out_file: &str,
     _multiasset: bool,
     _rewards: bool,
-    _ttl: Option<u64>,
-    _sign: bool,
+    ttl: Option<u64>,
+    sign: bool,
+    utxorpc_endpoint: Option<&str>,
 ) -> Result<()> {
-    println!("⚠️  drain-tx command requires UTxORPC integration");
-    println!("   This will be implemented in the next phase");
+    println!("🔨 Building drain transaction...");
+
+    // Get UTxORPC endpoint
+    let endpoint = utxorpc_endpoint
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "http://127.0.0.1:50051".to_string());
+
+    // Connect to UTxORPC
+    let mut client = WalletUtxorpcClient::connect(endpoint)
+        .await
+        .context("Failed to connect to UTxORPC endpoint")?;
+
+    // Parse recipient address
+    let recipient_addr = Address::from_bech32(address)
+        .context("Invalid recipient address")?;
+    let recipient_bytes = recipient_addr.to_vec();
+
+    // Load wallet metadata and derive account
+    let metadata = storage.load_metadata(wallet)
+        .context("Failed to load wallet")?;
+    let network = parse_network(&metadata.network)?;
+    let account_keys = storage.derive_account(wallet, account)
+        .context("Failed to derive account keys")?;
+
+    // Derive first 20 payment addresses
+    let mut payment_addresses = Vec::new();
+    for i in 0..20 {
+        let addr = derive_payment_address(
+            &account_keys.payment_key,
+            i,
+            &account_keys.stake_key,
+            network,
+        ).context("Failed to derive payment address")?;
+
+        let parsed_addr = Address::from_bech32(&addr)
+            .context("Failed to parse derived address")?;
+        payment_addresses.push(parsed_addr.to_vec());
+    }
+
+    println!("📡 Querying UTxOs from {} addresses...", payment_addresses.len());
+
+    // Query UTxOs
+    let utxos = client.query_utxos(payment_addresses.clone())
+        .await
+        .context("Failed to query UTxOs")?;
+
+    if utxos.is_empty() {
+        anyhow::bail!("No UTxOs found for this wallet");
+    }
+
+    // Calculate total balance
+    let total_lovelace: u64 = utxos.iter().map(|u| u.coin).sum();
+    let drain_amount = total_lovelace.saturating_sub(fee);
+
+    println!("✅ Found {} UTxO(s)", utxos.len());
+    println!("   Total balance: {} lovelace", total_lovelace);
+    println!("   Fee: {} lovelace", fee);
+    println!("   Draining: {} lovelace", drain_amount);
+
+    if drain_amount == 0 {
+        anyhow::bail!("Insufficient funds to cover fee");
+    }
+
+    // Build transaction (use all UTxOs, send everything minus fee)
+    let mut builder = TransactionBuilder::new(payment_addresses[0].clone());
+    builder.add_utxos(utxos);
+    builder.add_output(recipient_bytes, drain_amount, Vec::new());
+    builder.set_fee(fee);
+    if let Some(ttl_value) = ttl {
+        builder.set_ttl(ttl_value);
+    }
+
+    let (tx_body_cbor, selected_utxos) = builder.build()
+        .context("Failed to build transaction")?;
+
+    println!("✅ Drain transaction built successfully");
+    println!("   Using {} UTxO(s) as inputs", selected_utxos.len());
+
+    // Write or sign transaction
+    if sign {
+        println!("✍️  Signing transaction...");
+        let signed_tx = sign_transaction(&tx_body_cbor, &account_keys, false)
+            .context("Failed to sign transaction")?;
+
+        write_signed_tx(&signed_tx, out_file)
+            .context("Failed to write signed transaction")?;
+
+        println!("✅ Signed transaction written to: {}", out_file);
+        println!("   Submit with: cardano-cli transaction submit --tx-file {}", out_file);
+    } else {
+        write_tx_body(&tx_body_cbor, out_file)
+            .context("Failed to write transaction body")?;
+
+        println!("✅ Transaction body written to: {}", out_file);
+        println!("   Sign with: hayate wallet sign-tx --wallet {} --tx-body-file {} --out-file {}.signed",
+                 wallet, out_file, out_file);
+    }
+
     Ok(())
 }
 
-fn handle_stake_registration(
+async fn handle_stake_registration(
     _storage: &WalletStorage,
     _wallet: &str,
     _account: u32,
@@ -361,12 +548,13 @@ fn handle_stake_registration(
     _ttl: Option<u64>,
     _sign: bool,
 ) -> Result<()> {
-    println!("⚠️  stake-registration-tx command requires UTxORPC integration");
+    println!("⚠️  stake-registration-tx command not yet implemented");
+    println!("   Requires certificate encoding in transaction body");
     println!("   This will be implemented in the next phase");
     Ok(())
 }
 
-fn handle_delegate_pool(
+async fn handle_delegate_pool(
     _storage: &WalletStorage,
     _wallet: &str,
     _account: u32,
@@ -376,22 +564,52 @@ fn handle_delegate_pool(
     _ttl: Option<u64>,
     _sign: bool,
 ) -> Result<()> {
-    println!("⚠️  delegate-pool-tx command requires UTxORPC integration");
+    println!("⚠️  delegate-pool-tx command not yet implemented");
+    println!("   Requires certificate encoding in transaction body");
     println!("   This will be implemented in the next phase");
     Ok(())
 }
 
 fn handle_sign_tx(
-    _storage: &WalletStorage,
-    _wallet: &str,
-    _account: u32,
-    _tx_body_file: &str,
-    _out_file: &str,
-    _stake: bool,
+    storage: &WalletStorage,
+    wallet: &str,
+    account: u32,
+    tx_body_file: &str,
+    out_file: &str,
+    stake: bool,
 ) -> Result<()> {
-    println!("⚠️  sign-tx command requires proper CBOR transaction signing");
-    println!("   This will be fully implemented in the next phase");
-    println!("   For now, use cardano-cli to sign transactions");
+    println!("✍️  Signing transaction...");
+
+    // Read transaction body from file (hex-encoded)
+    let tx_body_hex = std::fs::read_to_string(tx_body_file)
+        .context("Failed to read transaction body file")?;
+    let tx_body_cbor = hex::decode(tx_body_hex.trim())
+        .context("Failed to decode hex transaction body")?;
+
+    println!("📄 Read transaction body: {} bytes", tx_body_cbor.len());
+
+    // Load account keys
+    let account_keys = storage.derive_account(wallet, account)
+        .context("Failed to derive account keys")?;
+
+    // Sign transaction
+    let signed_tx = sign_transaction(&tx_body_cbor, &account_keys, stake)
+        .context("Failed to sign transaction")?;
+
+    println!("✅ Transaction signed successfully");
+    if stake {
+        println!("   Signed with both payment and stake keys");
+    } else {
+        println!("   Signed with payment key only");
+    }
+
+    // Write signed transaction
+    write_signed_tx(&signed_tx, out_file)
+        .context("Failed to write signed transaction")?;
+
+    println!("✅ Signed transaction written to: {}", out_file);
+    println!("   Submit with: cardano-cli transaction submit --tx-file {}", out_file);
+
     Ok(())
 }
 

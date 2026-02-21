@@ -165,8 +165,17 @@ async fn handle_wallet_command(wallet_cmd: &cli::WalletCommand, args: &Args) -> 
         .map(|p| PathBuf::from(p).join("wallets"))
         .unwrap_or_else(|| PathBuf::from("./hayate-wallets"));
 
+    // Load config to get UTxORPC endpoint
+    let config = if let Some(ref config_path) = args.config {
+        config::HayateConfig::load(config_path)?
+    } else {
+        config::HayateConfig::default()
+    };
+
+    let utxorpc_endpoint = Some(format!("http://{}", config.api.bind));
+
     // Use the wallet CLI handler
-    wallet::handle_wallet_command(wallet_cmd, wallet_dir).await
+    wallet::handle_wallet_command(wallet_cmd, wallet_dir, utxorpc_endpoint).await
 }
 
 async fn handle_config_command(config_cmd: &cli::ConfigCommand) -> anyhow::Result<()> {
