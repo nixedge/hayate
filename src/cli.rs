@@ -140,6 +140,220 @@ pub enum WalletCommand {
         /// Wallet xpub or identifier
         wallet: String,
     },
+
+    // Transaction commands
+    /// Send ADA to an address
+    SendTx {
+        /// Wallet name
+        #[arg(long)]
+        wallet: String,
+
+        /// Account index
+        #[arg(long, default_value = "0")]
+        account: u32,
+
+        /// Recipient address
+        #[arg(long)]
+        address: String,
+
+        /// Amount in lovelace
+        #[arg(long)]
+        amount: u64,
+
+        /// Transaction fee in lovelace
+        #[arg(long)]
+        fee: u64,
+
+        /// Output file for transaction
+        #[arg(long)]
+        out_file: String,
+
+        /// Include native assets
+        #[arg(long)]
+        multiasset: bool,
+
+        /// TTL (time to live) slot
+        #[arg(long)]
+        ttl: Option<u64>,
+
+        /// Sign the transaction
+        #[arg(long)]
+        sign: bool,
+    },
+
+    /// Drain all funds from an account
+    DrainTx {
+        /// Wallet name
+        #[arg(long)]
+        wallet: String,
+
+        /// Account index
+        #[arg(long, default_value = "0")]
+        account: u32,
+
+        /// Destination address
+        #[arg(long)]
+        address: String,
+
+        /// Transaction fee in lovelace
+        #[arg(long)]
+        fee: u64,
+
+        /// Output file for transaction
+        #[arg(long)]
+        out_file: String,
+
+        /// Include native assets
+        #[arg(long)]
+        multiasset: bool,
+
+        /// Include staking rewards
+        #[arg(long)]
+        rewards: bool,
+
+        /// TTL (time to live) slot
+        #[arg(long)]
+        ttl: Option<u64>,
+
+        /// Sign the transaction
+        #[arg(long)]
+        sign: bool,
+    },
+
+    /// Create stake key registration transaction
+    StakeRegistrationTx {
+        /// Wallet name
+        #[arg(long)]
+        wallet: String,
+
+        /// Account index
+        #[arg(long, default_value = "0")]
+        account: u32,
+
+        /// Transaction fee in lovelace
+        #[arg(long)]
+        fee: u64,
+
+        /// Output file for transaction
+        #[arg(long)]
+        out_file: String,
+
+        /// Registration deposit (default: 2000000 lovelace)
+        #[arg(long, default_value = "2000000")]
+        deposit: u64,
+
+        /// TTL (time to live) slot
+        #[arg(long)]
+        ttl: Option<u64>,
+
+        /// Sign the transaction
+        #[arg(long)]
+        sign: bool,
+    },
+
+    /// Create stake pool delegation transaction
+    DelegatePoolTx {
+        /// Wallet name
+        #[arg(long)]
+        wallet: String,
+
+        /// Account index
+        #[arg(long, default_value = "0")]
+        account: u32,
+
+        /// Pool ID (bech32)
+        #[arg(long)]
+        pool_id: String,
+
+        /// Transaction fee in lovelace
+        #[arg(long)]
+        fee: u64,
+
+        /// Output file for transaction
+        #[arg(long)]
+        out_file: String,
+
+        /// TTL (time to live) slot
+        #[arg(long)]
+        ttl: Option<u64>,
+
+        /// Sign the transaction
+        #[arg(long)]
+        sign: bool,
+    },
+
+    /// Sign a transaction body
+    SignTx {
+        /// Wallet name
+        #[arg(long)]
+        wallet: String,
+
+        /// Account index
+        #[arg(long, default_value = "0")]
+        account: u32,
+
+        /// Transaction body file
+        #[arg(long)]
+        tx_body_file: String,
+
+        /// Output file for signed transaction
+        #[arg(long)]
+        out_file: String,
+
+        /// Sign with stake key as well
+        #[arg(long)]
+        stake: bool,
+    },
+
+    /// Create a transaction witness
+    WitnessTx {
+        /// Wallet name
+        #[arg(long)]
+        wallet: String,
+
+        /// Account index
+        #[arg(long, default_value = "0")]
+        account: u32,
+
+        /// Transaction body file
+        #[arg(long)]
+        tx_body_file: String,
+
+        /// Output file for witness
+        #[arg(long)]
+        out_file: String,
+
+        /// Witness type (payment or stake)
+        #[arg(long, default_value = "payment")]
+        role: String,
+    },
+
+    /// Sign a message (CIP-8)
+    SignMsg {
+        /// Wallet name
+        #[arg(long)]
+        wallet: String,
+
+        /// Account index
+        #[arg(long, default_value = "0")]
+        account: u32,
+
+        /// Message file to sign
+        #[arg(long)]
+        msg_file: String,
+
+        /// Output file for JSON signature
+        #[arg(long)]
+        out_file: String,
+
+        /// Use stake key instead of payment key
+        #[arg(long)]
+        stake: bool,
+
+        /// Hash the message before signing
+        #[arg(long)]
+        hashed: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]

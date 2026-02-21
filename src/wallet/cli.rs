@@ -8,7 +8,7 @@ use crate::wallet::{
 };
 use crate::gpg::Gpg;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use anyhow::{Result, Context};
 
 /// Handle wallet commands
@@ -54,6 +54,35 @@ pub async fn handle_wallet_command(
 
         WalletCommand::Txs { wallet: _ } => {
             println!("Transactions command not yet implemented");
+        }
+
+        // Transaction commands
+        WalletCommand::SendTx { wallet, account, address, amount, fee, out_file, multiasset, ttl, sign } => {
+            handle_send_tx(&storage, wallet, *account, address, *amount, *fee, out_file, *multiasset, *ttl, *sign)?;
+        }
+
+        WalletCommand::DrainTx { wallet, account, address, fee, out_file, multiasset, rewards, ttl, sign } => {
+            handle_drain_tx(&storage, wallet, *account, address, *fee, out_file, *multiasset, *rewards, *ttl, *sign)?;
+        }
+
+        WalletCommand::StakeRegistrationTx { wallet, account, fee, out_file, deposit, ttl, sign } => {
+            handle_stake_registration(&storage, wallet, *account, *fee, out_file, *deposit, *ttl, *sign)?;
+        }
+
+        WalletCommand::DelegatePoolTx { wallet, account, pool_id, fee, out_file, ttl, sign } => {
+            handle_delegate_pool(&storage, wallet, *account, pool_id, *fee, out_file, *ttl, *sign)?;
+        }
+
+        WalletCommand::SignTx { wallet, account, tx_body_file, out_file, stake } => {
+            handle_sign_tx(&storage, wallet, *account, tx_body_file, out_file, *stake)?;
+        }
+
+        WalletCommand::WitnessTx { wallet, account, tx_body_file, out_file, role } => {
+            handle_witness_tx(&storage, wallet, *account, tx_body_file, out_file, role)?;
+        }
+
+        WalletCommand::SignMsg { wallet, account, msg_file, out_file, stake, hashed } => {
+            handle_sign_msg(&storage, wallet, *account, msg_file, out_file, *stake, *hashed)?;
         }
     }
 
@@ -283,4 +312,182 @@ fn format_timestamp(timestamp: u64) -> String {
     // Simple formatting - just show the timestamp for now
     // In production, you might want to use chrono for better formatting
     format!("{:?}", datetime)
+}
+
+// Transaction command handlers
+
+fn handle_send_tx(
+    _storage: &WalletStorage,
+    _wallet: &str,
+    _account: u32,
+    _address: &str,
+    _amount: u64,
+    _fee: u64,
+    _out_file: &str,
+    _multiasset: bool,
+    _ttl: Option<u64>,
+    _sign: bool,
+) -> Result<()> {
+    println!("⚠️  send-tx command requires UTxORPC integration");
+    println!("   This will be implemented in the next phase");
+    println!("   For now, use cardano-cli to build transactions");
+    Ok(())
+}
+
+fn handle_drain_tx(
+    _storage: &WalletStorage,
+    _wallet: &str,
+    _account: u32,
+    _address: &str,
+    _fee: u64,
+    _out_file: &str,
+    _multiasset: bool,
+    _rewards: bool,
+    _ttl: Option<u64>,
+    _sign: bool,
+) -> Result<()> {
+    println!("⚠️  drain-tx command requires UTxORPC integration");
+    println!("   This will be implemented in the next phase");
+    Ok(())
+}
+
+fn handle_stake_registration(
+    _storage: &WalletStorage,
+    _wallet: &str,
+    _account: u32,
+    _fee: u64,
+    _out_file: &str,
+    _deposit: u64,
+    _ttl: Option<u64>,
+    _sign: bool,
+) -> Result<()> {
+    println!("⚠️  stake-registration-tx command requires UTxORPC integration");
+    println!("   This will be implemented in the next phase");
+    Ok(())
+}
+
+fn handle_delegate_pool(
+    _storage: &WalletStorage,
+    _wallet: &str,
+    _account: u32,
+    _pool_id: &str,
+    _fee: u64,
+    _out_file: &str,
+    _ttl: Option<u64>,
+    _sign: bool,
+) -> Result<()> {
+    println!("⚠️  delegate-pool-tx command requires UTxORPC integration");
+    println!("   This will be implemented in the next phase");
+    Ok(())
+}
+
+fn handle_sign_tx(
+    storage: &WalletStorage,
+    wallet: &str,
+    account: u32,
+    tx_body_file: &str,
+    out_file: &str,
+    stake: bool,
+) -> Result<()> {
+    use crate::wallet::transaction::{sign_transaction, write_signed_tx};
+
+    println!("🔏 Signing transaction...");
+
+    // Load transaction body
+    let tx_body_cbor = std::fs::read(tx_body_file)
+        .context("Failed to read transaction body file")?;
+
+    // Get account keys
+    let account_keys = storage.derive_account(wallet, account)
+        .context("Failed to derive account keys")?;
+
+    // Sign transaction
+    let signed_tx_cbor = sign_transaction(&tx_body_cbor, &account_keys, stake)
+        .context("Failed to sign transaction")?;
+
+    // Write signed transaction
+    write_signed_tx(&signed_tx_cbor, Path::new(out_file))
+        .context("Failed to write signed transaction")?;
+
+    println!("✅ Transaction signed successfully!");
+    println!("   Output: {}", out_file);
+    if stake {
+        println!("   Signed with: payment + stake keys");
+    } else {
+        println!("   Signed with: payment key only");
+    }
+
+    Ok(())
+}
+
+fn handle_witness_tx(
+    _storage: &WalletStorage,
+    _wallet: &str,
+    _account: u32,
+    _tx_body_file: &str,
+    _out_file: &str,
+    role: &str,
+) -> Result<()> {
+    println!("📝 Creating witness for transaction...");
+
+    // Validate role
+    if role != "payment" && role != "stake" {
+        anyhow::bail!("Role must be 'payment' or 'stake'");
+    }
+
+    println!("⚠️  witness-tx command requires witness set generation");
+    println!("   This will be fully implemented in the next phase");
+    println!("   For now, use sign-tx to create a fully signed transaction");
+
+    Ok(())
+}
+
+fn handle_sign_msg(
+    storage: &WalletStorage,
+    wallet: &str,
+    account: u32,
+    msg_file: &str,
+    out_file: &str,
+    stake: bool,
+    hashed: bool,
+) -> Result<()> {
+    use crate::wallet::transaction::sign_message;
+
+    println!("📝 Signing message...");
+
+    // Read message file
+    let message_data = std::fs::read(msg_file)
+        .context("Failed to read message file")?;
+
+    // If hashed flag is set, the message is already hashed, otherwise we hash it
+    // For now, we'll always hash in the sign_message function
+    if hashed {
+        println!("   Note: Message will be hashed before signing");
+    }
+
+    // Get account keys
+    let account_keys = storage.derive_account(wallet, account)
+        .context("Failed to derive account keys")?;
+
+    // Select key based on stake flag
+    let key = if stake {
+        &account_keys.stake_key
+    } else {
+        &account_keys.payment_key
+    };
+
+    // Sign the message
+    let signature = sign_message(&message_data, key, true)
+        .context("Failed to sign message")?;
+
+    // Write JSON output
+    let json = signature.to_json();
+    std::fs::write(out_file, json)
+        .context("Failed to write signature file")?;
+
+    println!("✅ Message signed successfully!");
+    println!("   Output: {}", out_file);
+    println!("   Signed with: {} key", if stake { "stake" } else { "payment" });
+
+    Ok(())
 }
