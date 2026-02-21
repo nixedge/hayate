@@ -1,0 +1,15 @@
+data_dir = "./token-test-db"
+gap_limit = 20
+
+[api]
+bind = "127.0.0.1:50051"
+enabled = false
+
+[[tokens]]
+policy_id = "bf3bbf5a8539663eddd53364a9fd90e468c0182fcf6f0642ac16d65f"
+label = "SanchoNet Test Token"
+
+[networks.sanchonet]
+enabled = true
+relay = "sanchonet-node.world.dev.cardano.org:30004"
+magic = 4

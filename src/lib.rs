@@ -1,7 +1,9 @@
 // Hayate library - UTxORPC Cardano indexer
 
+pub mod cli;
 pub mod mock_types;
 pub mod wallet;
+pub mod gpg;
 pub mod chain_sync;
 pub mod keys;
 pub mod rewards;  // Must come before indexer
@@ -15,3 +17,4 @@ pub mod node;  // Full node with ledger state snapshots
 pub use indexer::{HayateIndexer, Network, NetworkStorage, ChainTip, BlockProcessor, BlockStats};
 pub use config::HayateConfig;
 pub use chain_sync::{HayateSync, NodeConnection};
+pub use wallet::{WalletStorage, WalletMetadata};

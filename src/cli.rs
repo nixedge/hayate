@@ -58,6 +58,71 @@ pub enum Command {
 
 #[derive(Subcommand, Debug)]
 pub enum WalletCommand {
+    /// Initialize a new wallet with mnemonic
+    Init {
+        /// Wallet name
+        name: String,
+
+        /// GPG recipient for encryption (email or key ID)
+        #[arg(long)]
+        gpg_recipient: Option<String>,
+
+        /// Number of mnemonic words (12, 15, 18, 21, or 24)
+        #[arg(long, default_value = "24")]
+        words: usize,
+
+        /// Network (mainnet or testnet)
+        #[arg(long, default_value = "testnet")]
+        network: String,
+    },
+
+    /// Add existing wallet from mnemonic
+    Add {
+        /// Wallet name
+        name: String,
+
+        /// Mnemonic phrase (will prompt if not provided)
+        #[arg(long)]
+        mnemonic: Option<String>,
+
+        /// GPG recipient for encryption (email or key ID)
+        #[arg(long)]
+        gpg_recipient: Option<String>,
+
+        /// Network (mainnet or testnet)
+        #[arg(long, default_value = "testnet")]
+        network: String,
+    },
+
+    /// List all wallets
+    List,
+
+    /// Show wallet details and addresses
+    Show {
+        /// Wallet name
+        name: String,
+
+        /// Number of addresses to show
+        #[arg(long, default_value = "5")]
+        count: u32,
+    },
+
+    /// Export wallet mnemonic (WARNING: sensitive operation!)
+    Export {
+        /// Wallet name
+        name: String,
+    },
+
+    /// Delete a wallet
+    Delete {
+        /// Wallet name
+        name: String,
+
+        /// Skip confirmation prompt
+        #[arg(long)]
+        yes: bool,
+    },
+
     /// Show wallet statistics (UTxOs, balance, transactions)
     Stats {
         /// Wallet xpub or identifier (if not specified, shows all wallets)

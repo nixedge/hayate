@@ -3,6 +3,7 @@
 mod cli;
 mod mock_types;
 mod wallet;
+mod gpg;
 mod chain_sync;
 mod keys;
 mod rewards;
@@ -159,33 +160,13 @@ async fn run_chain_sync(
 }
 
 async fn handle_wallet_command(wallet_cmd: &cli::WalletCommand, args: &Args) -> anyhow::Result<()> {
-    match wallet_cmd {
-        cli::WalletCommand::Stats { wallet } => {
-            // Determine network
-            let network = args.network.as_ref()
-                .and_then(|n| Network::from_str(n))
-                .ok_or_else(|| anyhow::anyhow!("--network is required for wallet commands"))?;
+    // Determine wallet directory
+    let wallet_dir = args.db_path.as_ref()
+        .map(|p| PathBuf::from(p).join("wallets"))
+        .unwrap_or_else(|| PathBuf::from("./hayate-wallets"));
 
-            // Determine database path
-            let db_path = args.db_path.as_ref()
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("./hayate-db"));
-
-            // Get and print stats
-            let stats = wallet_stats::get_wallet_stats(db_path, network.clone(), wallet.clone())?;
-            wallet_stats::print_wallet_stats(stats, &network);
-
-            Ok(())
-        }
-        cli::WalletCommand::Utxos { wallet: _ } => {
-            println!("UTxOs command not yet implemented");
-            Ok(())
-        }
-        cli::WalletCommand::Txs { wallet: _ } => {
-            println!("Transactions command not yet implemented");
-            Ok(())
-        }
-    }
+    // Use the wallet CLI handler
+    wallet::handle_wallet_command(wallet_cmd, wallet_dir).await
 }
 
 async fn handle_config_command(config_cmd: &cli::ConfigCommand) -> anyhow::Result<()> {
