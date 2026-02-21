@@ -8,7 +8,7 @@ use crate::wallet::{
 };
 use crate::gpg::Gpg;
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use anyhow::{Result, Context};
 
 /// Handle wallet commands
