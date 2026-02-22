@@ -85,9 +85,25 @@ impl HayateSync {
                 tracing::info!("Connecting via Unix socket: {}", path_str);
 
                 // NodeClient::connect uses Path for Unix sockets
-                let client = NodeClient::connect(&path, magic)
+                let mut client = NodeClient::connect(&path, magic)
                     .await
                     .context(format!("Failed to connect to Unix socket: {}", path.display()))?;
+
+                // Find intersection point for resume
+                // Convert amaru Point to pallas Point
+                let pallas_point = match &start_point {
+                    Point::Origin => pallas_network::miniprotocols::Point::Origin,
+                    Point::Specific(slot, hash) => pallas_network::miniprotocols::Point::Specific(
+                        (*slot).into(),
+                        hash.to_vec(),
+                    ),
+                };
+
+                let intersection_points = vec![pallas_point];
+                client.chainsync()
+                    .find_intersect(intersection_points)
+                    .await
+                    .context("Failed to find intersection for N2C")?;
 
                 tracing::info!("✓ Connected via N2C (Unix socket)");
 
