@@ -1,10 +1,7 @@
 // UTxORPC Query Service implementation
 
 use tonic::{Request, Response, Status};
-use crate::indexer::{NetworkStorage, ChainTip};
-use cardano_lsm::Key;
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use crate::indexer::{StorageHandle, ChainTip};
 
 // Include generated proto code
 pub mod query {
@@ -23,24 +20,24 @@ use query::{
 };
 
 pub struct QueryServiceImpl {
-    storage: Arc<RwLock<NetworkStorage>>,
+    storage: StorageHandle,
     socket_path: Option<String>,
     magic: u64,
 }
 
 impl QueryServiceImpl {
     #[allow(dead_code)]
-    pub fn new(storage: NetworkStorage) -> Self {
+    pub fn new(storage: StorageHandle) -> Self {
         Self {
-            storage: Arc::new(RwLock::new(storage)),
+            storage,
             socket_path: None,
             magic: 0,
         }
     }
 
-    pub fn new_with_node(storage: NetworkStorage, socket_path: String, magic: u64) -> Self {
+    pub fn new_with_node(storage: StorageHandle, socket_path: String, magic: u64) -> Self {
         Self {
-            storage: Arc::new(RwLock::new(storage)),
+            storage,
             socket_path: Some(socket_path),
             magic,
         }
@@ -57,7 +54,6 @@ impl QueryService for QueryServiceImpl {
 
         tracing::debug!("ReadUtxos request for {} addresses", req.addresses.len());
 
-        let storage = self.storage.read().await;
         let mut utxos = Vec::new();
 
         // Convert addresses to hex for lookup
@@ -70,16 +66,14 @@ impl QueryService for QueryServiceImpl {
             tracing::debug!("Looking up UTxOs for address: {}", addr_hex);
 
             // Get UTxO keys for this address from index
-            let utxo_keys = storage.get_utxos_for_address(addr_hex)
+            let utxo_keys = self.storage.get_utxos_for_address(addr_hex.clone()).await
                 .map_err(|e| Status::internal(format!("Failed to query address index: {}", e)))?;
 
             tracing::debug!("Found {} UTxOs for address {}", utxo_keys.len(), addr_hex);
 
             // Retrieve full UTxO data for each key
             for utxo_key in utxo_keys {
-                let key = Key::from(utxo_key.as_bytes());
-
-                if let Some(utxo_data) = storage.utxo_tree.get(&key)
+                if let Some(utxo_data) = self.storage.get_utxo(utxo_key.clone()).await
                     .map_err(|e| Status::internal(format!("Failed to read UTxO: {}", e)))? {
 
                     // Parse UTxO JSON data
@@ -175,7 +169,7 @@ impl QueryService for QueryServiceImpl {
         tracing::debug!("Returning {} total UTxOs", utxos.len());
 
         // Get chain tip
-        let tip = storage.get_chain_tip()
+        let tip = self.storage.get_chain_tip().await
             .map_err(|e| Status::internal(format!("Failed to get chain tip: {}", e)))?
             .unwrap_or(ChainTip {
                 height: 0,
@@ -198,7 +192,6 @@ impl QueryService for QueryServiceImpl {
 
         tracing::debug!("SearchUtxos with pattern: {}", req.pattern);
 
-        let _storage = self.storage.read().await;
         let utxos = Vec::new();
 
         // Pattern matching:
@@ -245,8 +238,7 @@ impl QueryService for QueryServiceImpl {
         &self,
         _request: Request<ReadParamsRequest>,
     ) -> Result<Response<ReadParamsResponse>, Status> {
-        let storage = self.storage.read().await;
-        let tip = storage.get_chain_tip()
+        let tip = self.storage.get_chain_tip().await
             .map_err(|e| Status::internal(format!("Failed to get chain tip: {}", e)))?
             .unwrap_or(ChainTip {
                 height: 0,
@@ -265,8 +257,7 @@ impl QueryService for QueryServiceImpl {
         &self,
         _request: Request<GetChainTipRequest>,
     ) -> Result<Response<GetChainTipResponse>, Status> {
-        let storage = self.storage.read().await;
-        let tip = storage.get_chain_tip()
+        let tip = self.storage.get_chain_tip().await
             .map_err(|e| Status::internal(format!("Failed to get chain tip: {}", e)))?
             .unwrap_or(ChainTip {
                 height: 0,
@@ -292,10 +283,8 @@ impl QueryService for QueryServiceImpl {
         let address_hex = hex::encode(&req.address);
         tracing::debug!("GetTxHistory for address: {}", address_hex);
 
-        let storage = self.storage.read().await;
-
         // Get transaction hashes for this address
-        let tx_hashes_hex = storage.get_tx_history_for_address(&address_hex)
+        let tx_hashes_hex = self.storage.get_tx_history_for_address(address_hex).await
             .map_err(|e| Status::internal(format!("Failed to get tx history: {}", e)))?;
 
         // Convert to bytes
@@ -333,7 +322,6 @@ impl QueryService for QueryServiceImpl {
             req.max_events
         );
 
-        let storage = self.storage.read().await;
         let mut events = Vec::new();
 
         // Convert address filters to hex for comparison
@@ -346,13 +334,15 @@ impl QueryService for QueryServiceImpl {
             // Try event indices from 0 upward
             for event_index in 0..100000u64 {
                 let event_key = format!("slot#{:020}#{:010}", slot, event_index);
-                let key = Key::from(event_key.as_bytes());
 
-                // Try to get this event
-                match storage.block_events_tree.get(&key) {
-                    Ok(Some(event_data)) => {
+                // Try to get this event via storage handle
+                let event_data_opt = self.storage.get_block_event(event_key).await
+                    .map_err(|e| Status::internal(format!("Failed to get block event: {}", e)))?;
+
+                match event_data_opt {
+                    Some(event_data) => {
                         // Parse event JSON
-                        let event_json: serde_json::Value = match serde_json::from_slice(event_data.as_ref()) {
+                        let event_json: serde_json::Value = match serde_json::from_slice(&event_data) {
                             Ok(json) => json,
                             Err(e) => {
                                 tracing::warn!("Failed to parse event JSON: {}", e);
@@ -397,13 +387,9 @@ impl QueryService for QueryServiceImpl {
                             break 'slot_loop;
                         }
                     }
-                    Ok(None) => {
+                    None => {
                         // No more events for this slot
                         break;
-                    }
-                    Err(e) => {
-                        tracing::error!("Error reading event: {}", e);
-                        continue;
                     }
                 }
             }
@@ -425,8 +411,7 @@ impl QueryService for QueryServiceImpl {
         tracing::debug!("GetBlockByHash for hash: {}", hex::encode(&req.hash));
 
         // Look up block metadata in the index
-        let storage = self.storage.read().await;
-        let metadata = storage.get_block_metadata(&req.hash)
+        let metadata = self.storage.get_block_metadata(req.hash.clone()).await
             .map_err(|e| Status::internal(format!("Failed to query block index: {}", e)))?;
 
         let (slot, timestamp) = match metadata {
@@ -438,8 +423,6 @@ impl QueryService for QueryServiceImpl {
                 )));
             }
         };
-
-        drop(storage);  // Release storage lock before network call
 
         // Connect to node and fetch the block
         let socket_path = self.socket_path.as_ref()

@@ -18,11 +18,12 @@ pub async fn start_utxorpc_server(
     use tonic::transport::Server;
     use query::query::query_service_server::QueryServiceServer;
 
-    // Get network storage - we need to extract it to avoid holding the lock
-    let storage = {
-        let mut networks = indexer.networks.write().await;
-        networks.remove(&network)
+    // Get storage handle - clone it for API use
+    let storage_handle = {
+        let networks = indexer.networks.read().await;
+        networks.get(&network)
             .ok_or_else(|| anyhow::anyhow!("Network storage not found"))?
+            .clone()
     };
 
     let magic = network.magic();
@@ -30,10 +31,10 @@ pub async fn start_utxorpc_server(
     // Create query service with socket path if available
     let query_service = if let Some(socket) = socket_path {
         tracing::info!("Query service configured with node socket: {}", socket);
-        query::QueryServiceImpl::new_with_node(storage, socket, magic)
+        query::QueryServiceImpl::new_with_node(storage_handle, socket, magic)
     } else {
         tracing::warn!("Query service started without node socket - GetBlockByHash will not work");
-        query::QueryServiceImpl::new(storage)
+        query::QueryServiceImpl::new(storage_handle)
     };
 
     // Parse bind address

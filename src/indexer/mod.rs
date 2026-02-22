@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 pub mod block_processor;
+pub mod storage_manager;
 
 use cardano_lsm::{LsmTree, LsmConfig, MonoidalLsmTree, IncrementalMerkleTree, Key, Value};
 use std::path::PathBuf;
@@ -12,6 +13,7 @@ use anyhow::Result;
 
 #[allow(unused_imports)]
 pub use block_processor::{BlockProcessor, WalletFilter, BlockStats};
+pub use storage_manager::{StorageHandle, StorageManager};
 
 // Import RewardsTracker from the rewards module
 use crate::rewards::RewardsTracker;
@@ -454,7 +456,7 @@ pub struct ChainTip {
 }
 
 pub struct HayateIndexer {
-    pub networks: RwLock<HashMap<Network, NetworkStorage>>,
+    pub networks: RwLock<HashMap<Network, StorageHandle>>,
     pub account_xpubs: RwLock<Vec<String>>,
     pub gap_limit: u32,
     block_updates: broadcast::Sender<BlockUpdate>,
@@ -486,7 +488,14 @@ impl HayateIndexer {
     
     pub async fn add_network(&self, network: Network, base_path: PathBuf) -> Result<()> {
         let storage = NetworkStorage::open(base_path, network.clone())?;
-        self.networks.write().await.insert(network, storage);
+
+        // Create storage manager and spawn its task
+        let (manager, handle) = StorageManager::new(storage);
+        tokio::spawn(async move {
+            manager.run().await;
+        });
+
+        self.networks.write().await.insert(network, handle);
         Ok(())
     }
     

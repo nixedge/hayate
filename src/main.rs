@@ -38,14 +38,16 @@ async fn run_chain_sync(
     // Get wallet IDs for per-wallet tip tracking
     let wallet_ids = indexer.account_xpubs.read().await.clone();
 
-    // Get network storage
+    // Get storage handle
     let networks = indexer.networks.read().await;
-    let storage = networks.get(&network)
-        .ok_or_else(|| anyhow::anyhow!("Network storage not found"))?;
+    let storage_handle = networks.get(&network)
+        .ok_or_else(|| anyhow::anyhow!("Network storage not found"))?
+        .clone();
+    drop(networks); // Release read lock
 
     // Get minimum wallet tip for resume point
     // This ensures newly added wallets are indexed from their last known tip (or origin)
-    let start_point = if let Some(tip) = storage.get_min_wallet_tip(&wallet_ids)? {
+    let start_point = if let Some(tip) = storage_handle.get_min_wallet_tip(wallet_ids.clone()).await? {
         info!("Resuming from slot {} (minimum across {} wallets)", tip.slot, wallet_ids.len());
         let hash_bytes: [u8; 32] = tip.hash.try_into()
             .map_err(|_| anyhow::anyhow!("Invalid hash length"))?;
@@ -55,17 +57,15 @@ async fn run_chain_sync(
         AmaruPoint::Origin
     };
 
-    drop(networks); // Release read lock
-
     // Connect to node
     let magic = network.magic();
     let mut sync = HayateSync::connect_unix(&socket_path, magic, start_point).await?;
     info!("✅ Connected to Cardano node");
 
-    // Create block processor with wallet IDs
-    let mut networks = indexer.networks.write().await;
-    let storage = networks.remove(&network)
-        .ok_or_else(|| anyhow::anyhow!("Network storage not found"))?;
+    // Take storage from manager for block processing
+    let storage = storage_handle.take_storage().await
+        .ok_or_else(|| anyhow::anyhow!("Failed to acquire storage for block processing"))?;
+
     let mut processor = BlockProcessor::new(storage);
 
     // Add wallet IDs to processor for per-wallet tip tracking
@@ -81,8 +81,6 @@ async fn run_chain_sync(
     if !tokens.is_empty() {
         info!("Tracking {} native token(s)", tokens.len());
     }
-
-    drop(networks); // Release write lock
 
     info!("🔄 Starting block processing...");
 
@@ -159,6 +157,10 @@ async fn run_chain_sync(
     // Save tips before exiting (whether shutdown, error, or normal exit)
     info!("💾 Saving final chain tips...");
     processor.save_current_tips()?;
+
+    // Return storage to manager
+    info!("Returning storage to manager...");
+    storage_handle.return_storage(processor.storage).await?;
 
     result
 }
@@ -296,25 +298,25 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Loaded {} wallet(s)", config.wallets.len());
 
-    // If socket is provided, spawn chain sync in background task
+    // If socket is provided, start API in background and run chain sync in foreground
     if let Some(socket_path) = socket {
         info!("Socket: {}", socket_path);
         info!("Starting chain sync with UTxORPC API");
 
-        // Spawn chain sync in background task
+        // Spawn API server in background task
         let indexer_clone = Arc::clone(&indexer);
+        let api_bind = config.api.bind.clone();
         let socket_clone = socket_path.clone();
-        let tokens_clone = config.tokens.clone();
         let network_clone = network.clone();
         tokio::spawn(async move {
-            if let Err(e) = run_chain_sync(indexer_clone, network_clone, socket_clone, tokens_clone).await {
-                tracing::error!("Chain sync error: {}", e);
+            info!("🚀 Starting UTxORPC server on {}...", api_bind);
+            if let Err(e) = api::start_utxorpc_server(indexer_clone, api_bind, network_clone, Some(socket_clone)).await {
+                tracing::error!("API server error: {}", e);
             }
         });
 
-        // Start API server (this will block)
-        info!("🚀 Starting UTxORPC server on {}...", config.api.bind);
-        api::start_utxorpc_server(indexer, config.api.bind, network, Some(socket_path.clone())).await?;
+        // Run chain sync in main task (this will block)
+        run_chain_sync(indexer, network, socket_path.clone(), config.tokens.clone()).await?;
 
         return Ok(());
     }
