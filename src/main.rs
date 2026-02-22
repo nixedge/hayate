@@ -296,13 +296,25 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Loaded {} wallet(s)", config.wallets.len());
 
-    // If socket is provided, run in sync mode
+    // If socket is provided, spawn chain sync in background task
     if let Some(socket_path) = socket {
         info!("Socket: {}", socket_path);
-        info!("Running in sync mode (no API server)");
+        info!("Starting chain sync with UTxORPC API");
 
-        // Run chain sync (this will block forever)
-        run_chain_sync(indexer, network, socket_path.clone(), config.tokens.clone()).await?;
+        // Spawn chain sync in background task
+        let indexer_clone = Arc::clone(&indexer);
+        let socket_clone = socket_path.clone();
+        let tokens_clone = config.tokens.clone();
+        let network_clone = network.clone();
+        tokio::spawn(async move {
+            if let Err(e) = run_chain_sync(indexer_clone, network_clone, socket_clone, tokens_clone).await {
+                tracing::error!("Chain sync error: {}", e);
+            }
+        });
+
+        // Start API server (this will block)
+        info!("🚀 Starting UTxORPC server on {}...", config.api.bind);
+        api::start_utxorpc_server(indexer, config.api.bind, network, Some(socket_path.clone())).await?;
 
         return Ok(());
     }
