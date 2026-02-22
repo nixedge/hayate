@@ -321,6 +321,104 @@ impl StorageHandle {
         self.sender.send(StorageCommand::ReturnStorage { storage })?;
         Ok(())
     }
+
+    /// Insert UTxO
+    pub async fn insert_utxo(&self, utxo_key: String, utxo_data: Vec<u8>) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.sender.send(StorageCommand::InsertUtxo { utxo_key, utxo_data, response: tx })?;
+        rx.await?
+    }
+
+    /// Delete UTxO
+    pub async fn delete_utxo(&self, utxo_key: String) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.sender.send(StorageCommand::DeleteUtxo { utxo_key, response: tx })?;
+        rx.await?
+    }
+
+    /// Get balance
+    pub async fn get_balance(&self, address_hex: String) -> Result<u64> {
+        let (tx, rx) = oneshot::channel();
+        self.sender.send(StorageCommand::GetBalance { address_hex, response: tx })?;
+        rx.await?
+    }
+
+    /// Update balance
+    pub async fn update_balance(&self, address_hex: String, new_balance: u64) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.sender.send(StorageCommand::UpdateBalance { address_hex, new_balance, response: tx })?;
+        rx.await?
+    }
+
+    /// Add UTxO to address index
+    pub async fn add_utxo_to_address_index(&self, address_hex: String, utxo_key: String) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.sender.send(StorageCommand::AddUtxoToAddressIndex { address_hex, utxo_key, response: tx })?;
+        rx.await?
+    }
+
+    /// Remove UTxO from address index
+    pub async fn remove_utxo_from_address_index(&self, address_hex: String, utxo_key: String) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.sender.send(StorageCommand::RemoveUtxoFromAddressIndex { address_hex, utxo_key, response: tx })?;
+        rx.await?
+    }
+
+    /// Add transaction to address history
+    pub async fn add_tx_to_address_history(&self, address_hex: String, tx_hash_hex: String) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.sender.send(StorageCommand::AddTxToAddressHistory { address_hex, tx_hash_hex, response: tx })?;
+        rx.await?
+    }
+
+    /// Add transaction to policy index
+    pub async fn add_tx_to_policy_index(&self, policy_id_hex: String, tx_hash_hex: String) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.sender.send(StorageCommand::AddTxToPolicyIndex { policy_id_hex, tx_hash_hex, response: tx })?;
+        rx.await?
+    }
+
+    /// Add transaction to asset index
+    pub async fn add_tx_to_asset_index(&self, policy_id_hex: String, asset_name_hex: String, tx_hash_hex: String) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.sender.send(StorageCommand::AddTxToAssetIndex { policy_id_hex, asset_name_hex, tx_hash_hex, response: tx })?;
+        rx.await?
+    }
+
+    /// Insert spent UTxO record
+    pub async fn insert_spent_utxo(&self, utxo_key: String, spend_event: Vec<u8>) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.sender.send(StorageCommand::InsertSpentUtxo { utxo_key, spend_event, response: tx })?;
+        rx.await?
+    }
+
+    /// Delete spent UTxO record
+    pub async fn delete_spent_utxo(&self, utxo_key: String) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.sender.send(StorageCommand::DeleteSpentUtxo { utxo_key, response: tx })?;
+        rx.await?
+    }
+
+    /// Insert block event
+    pub async fn insert_block_event(&self, event_key: String, event_data: Vec<u8>) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.sender.send(StorageCommand::InsertBlockEvent { event_key, event_data, response: tx })?;
+        rx.await?
+    }
+
+    /// Delete block event
+    pub async fn delete_block_event(&self, event_key: String) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.sender.send(StorageCommand::DeleteBlockEvent { event_key, response: tx })?;
+        rx.await?
+    }
+
+    /// Store block metadata
+    pub async fn store_block_metadata(&self, block_hash: Vec<u8>, slot: u64, timestamp: u64) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.sender.send(StorageCommand::StoreBlockMetadata { block_hash, slot, timestamp, response: tx })?;
+        rx.await?
+    }
 }
 
 /// Storage manager task

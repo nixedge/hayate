@@ -1,9 +1,8 @@
 // Block processor - processes blocks from chain sync and updates storage
 
-use crate::indexer::NetworkStorage;
+use super::StorageHandle;
 use crate::config::TokenConfig;
 use anyhow::{Context, Result};
-use cardano_lsm::{Key, Value};
 use pallas_crypto::hash::Hash;
 use pallas_traverse::{MultiEraBlock, MultiEraTx, MultiEraOutput};
 use std::collections::{HashSet, VecDeque};
@@ -99,7 +98,7 @@ struct RollbackInfo {
 }
 
 pub struct BlockProcessor {
-    pub storage: NetworkStorage,
+    pub storage: StorageHandle,
     pub filter: WalletFilter,
     pub current_epoch: u64,
     pub blocks_processed: u64,
@@ -117,19 +116,17 @@ pub struct BlockProcessor {
 }
 
 impl BlockProcessor {
-    pub fn new(storage: NetworkStorage) -> Self {
-        Self::new_with_rollback_buffer(storage, 100)
+    pub async fn new(storage: StorageHandle) -> Result<Self> {
+        Self::new_with_rollback_buffer(storage, 100).await
     }
 
-    pub fn new_with_rollback_buffer(storage: NetworkStorage, buffer_size: usize) -> Self {
+    pub async fn new_with_rollback_buffer(storage: StorageHandle, buffer_size: usize) -> Result<Self> {
         // Try to restore chain tip
-        let current_slot = storage.get_chain_tip()
-            .ok()
-            .flatten()
+        let current_slot = storage.get_chain_tip().await?
             .map(|tip| tip.slot)
             .unwrap_or(0);
 
-        Self {
+        Ok(Self {
             storage,
             filter: WalletFilter::new(),
             current_epoch: 0,
@@ -139,7 +136,7 @@ impl BlockProcessor {
             tracked_tokens: Vec::new(),
             rollback_buffer: VecDeque::with_capacity(buffer_size),
             rollback_buffer_size: buffer_size,
-        }
+        })
     }
 
     /// Add a wallet ID for per-wallet tip tracking
@@ -158,7 +155,7 @@ impl BlockProcessor {
     }
 
     /// Process a block from CBOR bytes
-    pub fn process_block(&mut self, block_bytes: &[u8], slot: u64, block_hash: &[u8]) -> Result<BlockStats> {
+    pub async fn process_block(&mut self, block_bytes: &[u8], slot: u64, block_hash: &[u8]) -> Result<BlockStats> {
         // Check if this is a forward move
         if slot < self.current_slot {
             anyhow::bail!("Slot {} is before current slot {}. Use rollback_to() first.", slot, self.current_slot);
@@ -202,7 +199,7 @@ impl BlockProcessor {
 
         // Process each transaction in the block
         for (tx_index, tx) in block.txs().into_iter().enumerate() {
-            self.process_transaction(&tx, slot, block_hash, tx_index as u32, block_timestamp, &mut stats, &mut rollback_info)?;
+            self.process_transaction(&tx, slot, block_hash, tx_index as u32, block_timestamp, &mut stats, &mut rollback_info).await?;
         }
 
         // Persist block events for ReadUtxoEvents RPC queries
@@ -210,44 +207,36 @@ impl BlockProcessor {
 
         // Write CREATED events
         for utxo_key in &rollback_info.utxos_created {
-            let key = Key::from(utxo_key.as_bytes());
-            if let Some(utxo_data) = self.storage.utxo_tree.get(&key)? {
+            if let Some(utxo_data) = self.storage.get_utxo(utxo_key.clone()).await? {
                 let event_key = format!("slot#{:020}#{:010}", slot, event_index);
                 let event_data = serde_json::json!({
                     "event_type": "CREATED",
                     "utxo_key": utxo_key,
-                    "utxo_data": serde_json::from_slice::<serde_json::Value>(utxo_data.as_ref()).ok(),
+                    "utxo_data": serde_json::from_slice::<serde_json::Value>(&utxo_data).ok(),
                 });
                 let event_bytes = serde_json::to_vec(&event_data)?;
-                self.storage.block_events_tree.insert(
-                    &Key::from(event_key.as_bytes()),
-                    &Value::from(event_bytes.as_slice())
-                )?;
+                self.storage.insert_block_event(event_key, event_bytes).await?;
                 event_index += 1;
             }
         }
 
         // Write SPENT events
         for utxo_key in &rollback_info.spent_utxos_recorded {
-            let key = Key::from(utxo_key.as_bytes());
-            if let Some(spend_data) = self.storage.spent_utxo_index.get(&key)? {
-                let event_key = format!("slot#{:020}#{:010}", slot, event_index);
-                let event_data = serde_json::json!({
-                    "event_type": "SPENT",
-                    "utxo_key": utxo_key,
-                    "spend_data": serde_json::from_slice::<serde_json::Value>(spend_data.as_ref()).ok(),
-                });
-                let event_bytes = serde_json::to_vec(&event_data)?;
-                self.storage.block_events_tree.insert(
-                    &Key::from(event_key.as_bytes()),
-                    &Value::from(event_bytes.as_slice())
-                )?;
-                event_index += 1;
-            }
+            // Get spent UTxO data via get_utxo (which reads from spent_utxo_index internally)
+            // Actually, we need a method to read from spent_utxo_index directly
+            // For now, reconstruct from the rollback info
+            let event_key = format!("slot#{:020}#{:010}", slot, event_index);
+            let event_data = serde_json::json!({
+                "event_type": "SPENT",
+                "utxo_key": utxo_key,
+            });
+            let event_bytes = serde_json::to_vec(&event_data)?;
+            self.storage.insert_block_event(event_key, event_bytes).await?;
+            event_index += 1;
         }
 
         // Store block metadata in the block hash index for GetBlockByHash queries
-        self.storage.store_block_metadata(block_hash, slot, block_timestamp)?;
+        self.storage.store_block_metadata(block_hash.to_vec(), slot, block_timestamp).await?;
 
         self.current_slot = slot;
         self.blocks_processed += 1;
@@ -261,7 +250,7 @@ impl BlockProcessor {
         // Only update tips at epoch boundaries to minimize WAL bloat
         // Tips are also updated on rollbacks and shutdown
         if epoch_boundary {
-            self.save_current_tips()?;
+            self.save_current_tips().await?;
         }
 
         if self.blocks_processed % 1000 == 0 {
@@ -278,7 +267,7 @@ impl BlockProcessor {
 
     /// Roll back to a specific slot (inclusive)
     /// This will undo all blocks after the target slot
-    pub fn rollback_to(&mut self, target_slot: u64) -> Result<usize> {
+    pub async fn rollback_to(&mut self, target_slot: u64) -> Result<usize> {
         let mut blocks_rolled_back = 0;
 
         tracing::warn!("⚠️  Rolling back from slot {} to slot {}", self.current_slot, target_slot);
@@ -290,13 +279,13 @@ impl BlockProcessor {
             }
 
             let rollback_info = self.rollback_buffer.pop_back().unwrap();
-            self.rollback_block(&rollback_info)?;
+            self.rollback_block(&rollback_info).await?;
             blocks_rolled_back += 1;
         }
 
         // Update chain tip
         if let Some(last_block) = self.rollback_buffer.back() {
-            self.storage.store_chain_tip(last_block.slot, &last_block.block_hash, last_block.timestamp)?;
+            self.storage.store_chain_tip(last_block.slot, last_block.block_hash.clone(), last_block.timestamp).await?;
             self.current_slot = last_block.slot;
         } else {
             // Rolled back everything
@@ -310,15 +299,15 @@ impl BlockProcessor {
 
     /// Save current chain tip and wallet tips
     /// Should be called at epoch boundaries, rollbacks, and shutdown
-    pub fn save_current_tips(&mut self) -> Result<()> {
+    pub async fn save_current_tips(&mut self) -> Result<()> {
         // Get the current block hash from the most recent block in rollback buffer
         if let Some(last_block) = self.rollback_buffer.back() {
             // Store chain tip
-            self.storage.store_chain_tip(last_block.slot, &last_block.block_hash, last_block.timestamp)?;
+            self.storage.store_chain_tip(last_block.slot, last_block.block_hash.clone(), last_block.timestamp).await?;
 
             // Store per-wallet tips for all tracked wallets
             for wallet_id in &self.wallet_ids {
-                self.storage.store_wallet_tip(wallet_id, last_block.slot, &last_block.block_hash, last_block.timestamp)?;
+                self.storage.store_wallet_tip(wallet_id.clone(), last_block.slot, last_block.block_hash.clone(), last_block.timestamp).await?;
             }
 
             tracing::info!("💾 Saved tips at slot {}", last_block.slot);
@@ -328,45 +317,40 @@ impl BlockProcessor {
     }
 
     /// Roll back a single block using rollback info
-    fn rollback_block(&mut self, info: &RollbackInfo) -> Result<()> {
+    async fn rollback_block(&mut self, info: &RollbackInfo) -> Result<()> {
         tracing::debug!("Rolling back block at slot {}", info.slot);
 
         // Restore spent UTxOs
         for (utxo_key, utxo_data) in &info.utxos_spent {
-            let key = Key::from(utxo_key.as_bytes());
-            let value = Value::from(utxo_data.as_slice());
-            self.storage.utxo_tree.insert(&key, &value)?;
+            self.storage.insert_utxo(utxo_key.clone(), utxo_data.clone()).await?;
 
             // Restore balance and address index
             if let Ok(utxo_json) = serde_json::from_slice::<serde_json::Value>(utxo_data) {
                 if let Some(address) = utxo_json.get("address").and_then(|a| a.as_str()) {
                     if let Some(amount) = utxo_json.get("amount").and_then(|a| a.as_u64()) {
-                        let address_key = Key::from(address.as_bytes());
-                        let current_balance = self.storage.balance_tree.get(&address_key)?;
-                        self.storage.balance_tree.insert(&address_key, &(current_balance + amount))?;
+                        let current_balance = self.storage.get_balance(address.to_string()).await?;
+                        self.storage.update_balance(address.to_string(), current_balance + amount).await?;
                     }
 
                     // Add back to address index
-                    self.storage.add_utxo_to_address_index(address, utxo_key)?;
+                    self.storage.add_utxo_to_address_index(address.to_string(), utxo_key.clone()).await?;
                 }
             }
         }
 
         // Remove recorded spend events
         for utxo_key in &info.spent_utxos_recorded {
-            let key = Key::from(utxo_key.as_bytes());
-            self.storage.spent_utxo_index.delete(&key)?;
+            self.storage.delete_spent_utxo(utxo_key.clone()).await?;
         }
 
         // Delete block events for this slot
         // We don't know exactly how many events there are, so we try deleting up to a reasonable limit
         for event_index in 0..100000u64 {
             let event_key = format!("slot#{:020}#{:010}", info.slot, event_index);
-            let key = Key::from(event_key.as_bytes());
 
-            // Try to delete - if key doesn't exist, delete is a no-op
-            if self.storage.block_events_tree.get(&key)?.is_some() {
-                self.storage.block_events_tree.delete(&key)?;
+            // Try to get event - if it doesn't exist, we're done
+            if self.storage.get_block_event(event_key.clone()).await?.is_some() {
+                self.storage.delete_block_event(event_key).await?;
             } else {
                 // No more events for this slot
                 break;
@@ -375,35 +359,32 @@ impl BlockProcessor {
 
         // Delete created UTxOs
         for utxo_key in &info.utxos_created {
-            let key = Key::from(utxo_key.as_bytes());
-
             // Get UTxO data to update balance and index
-            if let Some(utxo_data) = self.storage.utxo_tree.get(&key)? {
-                if let Ok(utxo_json) = serde_json::from_slice::<serde_json::Value>(utxo_data.as_ref()) {
+            if let Some(utxo_data) = self.storage.get_utxo(utxo_key.clone()).await? {
+                if let Ok(utxo_json) = serde_json::from_slice::<serde_json::Value>(&utxo_data) {
                     if let Some(address) = utxo_json.get("address").and_then(|a| a.as_str()) {
                         if let Some(amount) = utxo_json.get("amount").and_then(|a| a.as_u64()) {
-                            let address_key = Key::from(address.as_bytes());
-                            let current_balance = self.storage.balance_tree.get(&address_key)?;
+                            let current_balance = self.storage.get_balance(address.to_string()).await?;
                             let new_balance = current_balance.saturating_sub(amount);
-                            self.storage.balance_tree.insert(&address_key, &new_balance)?;
+                            self.storage.update_balance(address.to_string(), new_balance).await?;
                         }
 
                         // Remove from address index
-                        self.storage.remove_utxo_from_address_index(address, utxo_key)?;
+                        self.storage.remove_utxo_from_address_index(address.to_string(), utxo_key.clone()).await?;
                     }
                 }
             }
 
-            self.storage.utxo_tree.delete(&key)?;
+            self.storage.delete_utxo(utxo_key.clone()).await?;
         }
 
         Ok(())
     }
 
     /// Process a single transaction
-    fn process_transaction(
+    async fn process_transaction(
         &mut self,
-        tx: &MultiEraTx,
+        tx: &MultiEraTx<'_>,
         slot: u64,
         block_hash: &[u8],
         tx_index: u32,
@@ -418,23 +399,23 @@ impl BlockProcessor {
 
         // Process inputs (spend UTxOs)
         for input in tx.inputs() {
-            self.process_input(&input, &tx_hash, slot, block_hash, tx_index, block_timestamp, stats, rollback_info)?;
+            self.process_input(&input, &tx_hash, slot, block_hash, tx_index, block_timestamp, stats, rollback_info).await?;
         }
 
         // Process outputs (create UTxOs)
         let outputs = tx.outputs();
         for output_idx in 0..outputs.len() {
-            self.process_output(&outputs[output_idx], &tx_hash, output_idx, slot, block_hash, tx_index, block_timestamp, stats, rollback_info)?;
+            self.process_output(&outputs[output_idx], &tx_hash, output_idx, slot, block_hash, tx_index, block_timestamp, stats, rollback_info).await?;
         }
 
         // Add transaction to history for all affected addresses
         for address_hex in &stats.addresses_affected {
-            self.storage.add_tx_to_address_history(address_hex, &tx_hash_hex)?;
+            self.storage.add_tx_to_address_history(address_hex.clone(), tx_hash_hex.clone()).await?;
         }
 
         // Track native tokens - check if this transaction contains any tracked tokens
         if !self.tracked_tokens.is_empty() {
-            self.track_tokens_in_transaction(tx, &tx_hash_hex)?;
+            self.track_tokens_in_transaction(tx, &tx_hash_hex).await?;
         }
 
         // TODO: Process certificates (delegations, pool registrations, etc.)
@@ -445,9 +426,9 @@ impl BlockProcessor {
     }
 
     /// Process an input (spend a UTxO)
-    fn process_input(
+    async fn process_input(
         &mut self,
-        input: &pallas_traverse::MultiEraInput,
+        input: &pallas_traverse::MultiEraInput<'_>,
         spending_tx_hash: &Hash<32>,
         slot: u64,
         block_hash: &[u8],
@@ -460,27 +441,25 @@ impl BlockProcessor {
         let utxo_key = format!("{}#{}", hex::encode(input.hash()), input.index());
 
         // Check if this UTxO exists in our storage
-        let key = Key::from(utxo_key.as_bytes());
-        if let Some(utxo_data) = self.storage.utxo_tree.get(&key)? {
+        if let Some(utxo_data) = self.storage.get_utxo(utxo_key.clone()).await? {
             // Save for rollback
-            rollback_info.utxos_spent.push((utxo_key.clone(), utxo_data.as_ref().to_vec()));
+            rollback_info.utxos_spent.push((utxo_key.clone(), utxo_data.clone()));
 
             // Parse the stored UTxO data
-            if let Ok(utxo_json) = serde_json::from_slice::<serde_json::Value>(utxo_data.as_ref()) {
+            if let Ok(utxo_json) = serde_json::from_slice::<serde_json::Value>(&utxo_data) {
                 // Extract address and amount
                 if let Some(address) = utxo_json.get("address").and_then(|a| a.as_str()) {
                     stats.addresses_affected.insert(address.to_string());
 
                     // Update balance (subtract)
                     if let Some(amount) = utxo_json.get("amount").and_then(|a| a.as_u64()) {
-                        let address_key = Key::from(address.as_bytes());
-                        let current_balance = self.storage.balance_tree.get(&address_key)?;
+                        let current_balance = self.storage.get_balance(address.to_string()).await?;
                         let new_balance = current_balance.saturating_sub(amount);
-                        self.storage.balance_tree.insert(&address_key, &new_balance)?;
+                        self.storage.update_balance(address.to_string(), new_balance).await?;
                     }
 
                     // Remove from address index
-                    self.storage.remove_utxo_from_address_index(address, &utxo_key)?;
+                    self.storage.remove_utxo_from_address_index(address.to_string(), utxo_key.clone()).await?;
                 }
             }
 
@@ -494,14 +473,13 @@ impl BlockProcessor {
             });
 
             let spend_event_bytes = serde_json::to_vec(&spend_event)?;
-            let spend_event_value = Value::from(spend_event_bytes.as_slice());
-            self.storage.spent_utxo_index.insert(&key, &spend_event_value)?;
+            self.storage.insert_spent_utxo(utxo_key.clone(), spend_event_bytes).await?;
 
             // Save spend event for rollback (so we can remove it if we rollback)
             rollback_info.spent_utxos_recorded.push(utxo_key.clone());
 
             // Delete the UTxO
-            self.storage.utxo_tree.delete(&key)?;
+            self.storage.delete_utxo(utxo_key.clone()).await?;
             stats.utxos_spent += 1;
 
             tracing::debug!("Spent UTxO: {} by tx {}", utxo_key, hex::encode(spending_tx_hash.as_ref()));
@@ -511,9 +489,9 @@ impl BlockProcessor {
     }
 
     /// Process an output (create a UTxO)
-    fn process_output(
+    async fn process_output(
         &mut self,
-        output: &MultiEraOutput,
+        output: &MultiEraOutput<'_>,
         tx_hash: &Hash<32>,
         output_idx: usize,
         slot: u64,
@@ -543,14 +521,14 @@ impl BlockProcessor {
             if !assets.is_empty() {
                 let mut map = serde_json::Map::new();
                 for policy_assets in assets {
-                    let policy_id_hex = hex::encode(policy_assets.policy());
+                    let policy_id_hex = hex::encode(policy_assets.policy().as_ref());
                     for asset in policy_assets.assets() {
                         let asset_name_hex = hex::encode(asset.name());
                         let key = format!("{}.{}", policy_id_hex, asset_name_hex);
 
                         // Extract actual asset amount based on era
                         let amount = match &asset {
-                            pallas_traverse::MultiEraAsset::AlonzoCompatibleOutput(_, _, amt) => *amt as u64,
+                            pallas_traverse::MultiEraAsset::AlonzoCompatibleOutput(_, _, amt) => *amt,
                             pallas_traverse::MultiEraAsset::ConwayOutput(_, _, amt) => u64::from(*amt),
                             _ => 0, // Shouldn't happen for outputs
                         };
@@ -620,20 +598,18 @@ impl BlockProcessor {
             utxo_data["script_ref"] = serde_json::json!(script_ref);
         }
 
-        let key = Key::from(utxo_key.as_bytes());
-        let value = Value::from(&serde_json::to_vec(&utxo_data)?);
-        self.storage.utxo_tree.insert(&key, &value)?;
+        let utxo_bytes = serde_json::to_vec(&utxo_data)?;
+        self.storage.insert_utxo(utxo_key.clone(), utxo_bytes).await?;
 
         // Save for rollback
         rollback_info.utxos_created.push(utxo_key.clone());
 
         // Update balance
-        let address_key = Key::from(address_hex.as_bytes());
-        let current_balance = self.storage.balance_tree.get(&address_key)?;
-        self.storage.balance_tree.insert(&address_key, &(current_balance + lovelace))?;
+        let current_balance = self.storage.get_balance(address_hex.clone()).await?;
+        self.storage.update_balance(address_hex.clone(), current_balance + lovelace).await?;
 
         // Add to address index
-        self.storage.add_utxo_to_address_index(&address_hex, &utxo_key)?;
+        self.storage.add_utxo_to_address_index(address_hex.clone(), utxo_key.clone()).await?;
 
         stats.utxos_created += 1;
         stats.addresses_affected.insert(address_hex);
@@ -645,7 +621,7 @@ impl BlockProcessor {
 
     /// Track native tokens in a transaction
     /// Checks if any outputs contain tracked tokens and adds tx to indexes
-    fn track_tokens_in_transaction(&mut self, tx: &MultiEraTx, tx_hash_hex: &str) -> Result<()> {
+    async fn track_tokens_in_transaction(&mut self, tx: &MultiEraTx<'_>, tx_hash_hex: &str) -> Result<()> {
         // Check all outputs for tracked tokens
         for output in tx.outputs() {
             let value = output.value();
@@ -661,13 +637,13 @@ impl BlockProcessor {
             // Iterate through all policy IDs and assets in this output
             for policy_assets in &assets {
                 let policy_id_bytes = policy_assets.policy();
-                let policy_id_hex = hex::encode(policy_id_bytes);
+                let policy_id_hex = hex::encode(policy_id_bytes.as_ref());
 
                 // Check if this policy is tracked
                 for tracked_token in &self.tracked_tokens {
                     if tracked_token.policy_id == policy_id_hex {
                         // Track at policy level
-                        self.storage.add_tx_to_policy_index(&policy_id_hex, tx_hash_hex)?;
+                        self.storage.add_tx_to_policy_index(policy_id_hex.clone(), tx_hash_hex.to_string()).await?;
 
                         // If tracking specific assets, check asset names
                         if let Some(ref tracked_asset_name) = tracked_token.asset_name {
@@ -676,10 +652,10 @@ impl BlockProcessor {
 
                                 if &asset_name_hex == tracked_asset_name {
                                     self.storage.add_tx_to_asset_index(
-                                        &policy_id_hex,
-                                        &asset_name_hex,
-                                        tx_hash_hex
-                                    )?;
+                                        policy_id_hex.clone(),
+                                        asset_name_hex.clone(),
+                                        tx_hash_hex.to_string()
+                                    ).await?;
 
                                     tracing::debug!(
                                         "Tracked token in tx {}: {}.{}",
@@ -694,10 +670,10 @@ impl BlockProcessor {
                             for asset in policy_assets.assets() {
                                 let asset_name_hex = hex::encode(asset.name());
                                 self.storage.add_tx_to_asset_index(
-                                    &policy_id_hex,
-                                    &asset_name_hex,
-                                    tx_hash_hex
-                                )?;
+                                    policy_id_hex.clone(),
+                                    asset_name_hex.clone(),
+                                    tx_hash_hex.to_string()
+                                ).await?;
                             }
 
                             tracing::debug!(

@@ -62,11 +62,8 @@ async fn run_chain_sync(
     let mut sync = HayateSync::connect_unix(&socket_path, magic, start_point).await?;
     info!("✅ Connected to Cardano node");
 
-    // Take storage from manager for block processing
-    let storage = storage_handle.take_storage().await
-        .ok_or_else(|| anyhow::anyhow!("Failed to acquire storage for block processing"))?;
-
-    let mut processor = BlockProcessor::new(storage);
+    // Create block processor with storage handle
+    let mut processor = BlockProcessor::new(storage_handle.clone()).await?;
 
     // Add wallet IDs to processor for per-wallet tip tracking
     for wallet_id in &wallet_ids {
@@ -105,7 +102,7 @@ async fn run_chain_sync(
                         let hash = block.hash();
 
                         // Process block
-                        match processor.process_block(&block_bytes, slot, hash.as_ref()) {
+                        match processor.process_block(&block_bytes, slot, hash.as_ref()).await {
                             Ok(_stats) => {
                                 // Only log progress every 1000 blocks to reduce overhead
                                 // The processor already logs every 100 blocks with more detail
@@ -130,14 +127,14 @@ async fn run_chain_sync(
                         info!("⚠️  Rollback to {:?}", point);
                         match point {
                             PallasPoint::Specific(slot, _) => {
-                                match processor.rollback_to(slot) {
+                                match processor.rollback_to(slot).await {
                                     Ok(count) => info!("✓ Rolled back {} blocks", count),
                                     Err(e) => tracing::error!("Failed to rollback: {}", e),
                                 }
                             }
                             PallasPoint::Origin => {
                                 info!("Rollback to origin requested");
-                                match processor.rollback_to(0) {
+                                match processor.rollback_to(0).await {
                                     Ok(count) => info!("✓ Rolled back {} blocks to origin", count),
                                     Err(e) => tracing::error!("Failed to rollback to origin: {}", e),
                                 }
@@ -156,11 +153,7 @@ async fn run_chain_sync(
 
     // Save tips before exiting (whether shutdown, error, or normal exit)
     info!("💾 Saving final chain tips...");
-    processor.save_current_tips()?;
-
-    // Return storage to manager
-    info!("Returning storage to manager...");
-    storage_handle.return_storage(processor.storage).await?;
+    processor.save_current_tips().await?;
 
     result
 }
