@@ -52,7 +52,15 @@ impl QueryService for QueryServiceImpl {
     ) -> Result<Response<ReadUtxosResponse>, Status> {
         let req = request.into_inner();
 
-        tracing::debug!("ReadUtxos request for {} addresses", req.addresses.len());
+        tracing::debug!(
+            "ReadUtxos request for {} addresses: [{}]",
+            req.addresses.len(),
+            req.addresses.iter()
+                .take(5)
+                .map(|a| hex::encode(a))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
 
         let mut utxos = Vec::new();
 
@@ -166,8 +174,6 @@ impl QueryService for QueryServiceImpl {
             }
         }
 
-        tracing::debug!("Returning {} total UTxOs", utxos.len());
-
         // Get chain tip
         let tip = self.storage.get_chain_tip().await
             .map_err(|e| Status::internal(format!("Failed to get chain tip: {}", e)))?
@@ -177,6 +183,12 @@ impl QueryService for QueryServiceImpl {
                 hash: vec![],
                 timestamp: 0,
             });
+
+        tracing::debug!(
+            "ReadUtxos response: {} UTxOs, tip slot: {}",
+            utxos.len(),
+            tip.slot
+        );
 
         Ok(Response::new(ReadUtxosResponse {
             items: utxos,
@@ -238,6 +250,8 @@ impl QueryService for QueryServiceImpl {
         &self,
         _request: Request<ReadParamsRequest>,
     ) -> Result<Response<ReadParamsResponse>, Status> {
+        tracing::debug!("ReadParams request");
+
         let tip = self.storage.get_chain_tip().await
             .map_err(|e| Status::internal(format!("Failed to get chain tip: {}", e)))?
             .unwrap_or(ChainTip {
@@ -246,6 +260,8 @@ impl QueryService for QueryServiceImpl {
                 hash: vec![],
                 timestamp: 0,
             });
+
+        tracing::debug!("ReadParams response: slot={}, hash={}", tip.slot, hex::encode(&tip.hash));
 
         Ok(Response::new(ReadParamsResponse {
             slot: tip.slot,
@@ -257,6 +273,8 @@ impl QueryService for QueryServiceImpl {
         &self,
         _request: Request<GetChainTipRequest>,
     ) -> Result<Response<GetChainTipResponse>, Status> {
+        tracing::debug!("GetChainTip request");
+
         let tip = self.storage.get_chain_tip().await
             .map_err(|e| Status::internal(format!("Failed to get chain tip: {}", e)))?
             .unwrap_or(ChainTip {
@@ -265,6 +283,13 @@ impl QueryService for QueryServiceImpl {
                 hash: vec![],
                 timestamp: 0,
             });
+
+        tracing::debug!(
+            "GetChainTip response: height={}, slot={}, hash={}",
+            tip.height,
+            tip.slot,
+            hex::encode(&tip.hash)
+        );
 
         Ok(Response::new(GetChainTipResponse {
             height: tip.height,
