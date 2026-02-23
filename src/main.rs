@@ -80,24 +80,25 @@ async fn run_chain_sync(
 
     // Process blocks - loop until shutdown signal
     let mut shutdown = Box::pin(tokio::signal::ctrl_c());
-    let mut awaiting = false;
     let result: anyhow::Result<()> = loop {
         tokio::select! {
             _ = &mut shutdown => {
                 info!("🛑 Received shutdown signal, saving tips...");
                 break Ok(());
             }
-            _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)), if awaiting => {
-                // When awaiting, just sleep and continue
-                continue;
-            }
-            next = sync.request_next(), if !awaiting => {
-                let next = next?;
+            next_result = async {
+                // Check agency and call appropriate method
+                if sync.has_agency() {
+                    sync.request_next().await
+                } else {
+                    sync.await_next().await
+                }
+            } => {
+                let next = next_result?;
 
         // Process the response
         match next {
             NextResponse::RollForward(block_bytes, _tip) => {
-                awaiting = false;
                 // Parse block to get slot and hash
                 let block = MultiEraBlock::decode(&block_bytes)?;
                 let slot = block.slot();
@@ -122,7 +123,6 @@ async fn run_chain_sync(
                 }
             }
             NextResponse::RollBackward(point, _tip) => {
-                awaiting = false;
                 info!("⚠️  Rollback to {:?}", point);
                 match point {
                     Point::Specific(slot, _) => {
@@ -141,11 +141,11 @@ async fn run_chain_sync(
                 }
             }
             NextResponse::Await => {
-                info!("Caught up, waiting for new blocks...");
-                awaiting = true;
+                info!("🔵 Caught up - waiting for new blocks...");
+                // Agency has shifted to server, next iteration will call await_next()
                 }
             }
-        }
+            }
         }
     };
 

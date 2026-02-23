@@ -35,13 +35,11 @@ impl HayateSync {
     }
 
     /// Check if we have agency (i.e., we can request next)
-    #[allow(dead_code)]
     pub fn has_agency(&mut self) -> bool {
         self.client.chainsync().has_agency()
     }
 
     /// Wait for the server to send us the next message (when they have agency)
-    #[allow(dead_code)]
     pub async fn await_next(&mut self) -> Result<NextResponse<Vec<u8>>> {
         let response = self.client.chainsync()
             .recv_while_must_reply()
