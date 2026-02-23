@@ -52,8 +52,15 @@ pub async fn start_utxorpc_server(
         .build_v1()
         .map_err(|e| anyhow::anyhow!("Failed to build reflection service: {}", e))?;
 
+    // Increase gRPC message size limits to handle large token responses
+    // Default is 4MB, increase to 128MB for large native token datasets
+    // Current CNight token dataset is ~8.2MB, this provides ample headroom
+    let query_server = QueryServiceServer::new(query_service)
+        .max_decoding_message_size(128 * 1024 * 1024) // 128MB
+        .max_encoding_message_size(128 * 1024 * 1024); // 128MB
+
     Server::builder()
-        .add_service(QueryServiceServer::new(query_service))
+        .add_service(query_server)
         .add_service(reflection_service)
         .serve(addr)
         .await?;
