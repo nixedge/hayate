@@ -145,7 +145,7 @@ async fn run_chain_sync(
             }
             NextResponse::Await => {
                 if !is_caught_up {
-                    info!("🔵 Caught up - waiting for new blocks...");
+                    tracing::trace!("Caught up - waiting for new blocks");
                     is_caught_up = true;
                 }
                 // The protocol state machine requires us to call recv_while_must_reply()
