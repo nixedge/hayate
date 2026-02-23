@@ -28,6 +28,7 @@ async-trait = "0.1"
 
 # gRPC / UTxORPC
 tonic = "0.12"
+tonic-reflection = "0.12"
 prost = "0.13"
 prost-types = "0.13"
 

@@ -7,6 +7,9 @@ pub mod submit;
 use std::sync::Arc;
 use crate::indexer::HayateIndexer;
 
+// Include the file descriptor set for gRPC reflection
+const FILE_DESCRIPTOR_SET: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/proto_descriptor.bin"));
+
 
 /// Start the UTxORPC gRPC server
 pub async fn start_utxorpc_server(
@@ -42,8 +45,16 @@ pub async fn start_utxorpc_server(
 
     tracing::info!("🚀 UTxORPC server listening on {}", addr);
 
+    // Build reflection service for gRPC introspection
+    use tonic_reflection::server::Builder as ReflectionBuilder;
+    let reflection_service = ReflectionBuilder::configure()
+        .register_encoded_file_descriptor_set(FILE_DESCRIPTOR_SET)
+        .build_v1()
+        .map_err(|e| anyhow::anyhow!("Failed to build reflection service: {}", e))?;
+
     Server::builder()
         .add_service(QueryServiceServer::new(query_service))
+        .add_service(reflection_service)
         .serve(addr)
         .await?;
 
