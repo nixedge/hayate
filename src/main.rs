@@ -80,6 +80,7 @@ async fn run_chain_sync(
 
     // Process blocks - loop until shutdown signal
     let mut shutdown = Box::pin(tokio::signal::ctrl_c());
+    let mut is_caught_up = false;
     let result: anyhow::Result<()> = loop {
         tokio::select! {
             _ = &mut shutdown => {
@@ -99,6 +100,7 @@ async fn run_chain_sync(
         // Process the response
         match next {
             NextResponse::RollForward(block_bytes, _tip) => {
+                is_caught_up = false;
                 // Parse block to get slot and hash
                 let block = MultiEraBlock::decode(&block_bytes)?;
                 let slot = block.slot();
@@ -123,6 +125,7 @@ async fn run_chain_sync(
                 }
             }
             NextResponse::RollBackward(point, _tip) => {
+                is_caught_up = false;
                 info!("⚠️  Rollback to {:?}", point);
                 match point {
                     Point::Specific(slot, _) => {
@@ -141,7 +144,10 @@ async fn run_chain_sync(
                 }
             }
             NextResponse::Await => {
-                info!("🔵 Caught up - waiting for new blocks...");
+                if !is_caught_up {
+                    info!("🔵 Caught up - waiting for new blocks...");
+                    is_caught_up = true;
+                }
                 // Agency has shifted to server, next iteration will call await_next()
                 }
             }
