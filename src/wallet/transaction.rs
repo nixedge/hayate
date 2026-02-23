@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
+#[allow(dead_code)]
 pub enum TransactionError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
@@ -380,6 +381,7 @@ pub fn sign_transaction(
 }
 
 /// Helper: Build a simple send transaction
+#[allow(dead_code)]
 pub async fn build_send_transaction(
     client: &mut WalletUtxorpcClient,
     _account: &Account,

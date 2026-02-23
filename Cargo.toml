@@ -51,16 +51,14 @@ thiserror = "1.0"
 anyhow = "1.0"
 
 # Cardano libraries
-amaru-network = { git = "https://github.com/pragma-org/amaru.git", branch = "main", package = "amaru-network" }
-amaru-kernel = { git = "https://github.com/pragma-org/amaru.git", branch = "main", package = "amaru-kernel" }
-pallas-network = "0.34.0"
-pallas-traverse = "0.34.0"
-pallas-crypto = "0.34.0"
-pallas-addresses = "0.34.0"
-pallas-configs = "0.34.0"
-pallas = "0.34.0"
-pallas-codec = "0.34.0"
-pallas-primitives = "0.34.0"
+pallas-network = "0.35.0"
+pallas-traverse = "0.35.0"
+pallas-crypto = "0.35.0"
+pallas-addresses = "0.35.0"
+pallas-configs = "0.35.0"
+pallas = "0.35.0"
+pallas-codec = "0.35.0"
+pallas-primitives = "0.35.0"
 
 # Crypto and key derivation
 bip39 = "2"

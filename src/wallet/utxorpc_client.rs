@@ -42,6 +42,7 @@ impl WalletUtxorpcClient {
     }
 
     /// Get current chain tip
+    #[allow(dead_code)]
     pub async fn get_chain_tip(&mut self) -> Result<ChainTip> {
         let request = GetChainTipRequest {};
 
@@ -60,6 +61,7 @@ impl WalletUtxorpcClient {
 
 /// Chain tip information
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ChainTip {
     pub height: u64,
     pub slot: u64,
@@ -68,13 +70,17 @@ pub struct ChainTip {
 
 /// UTxO data structure
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct UtxoData {
     pub tx_hash: Vec<u8>,
     pub output_index: u32,
+    #[allow(dead_code)]
     pub address: Vec<u8>,
     pub coin: u64,
     pub assets: Vec<AssetData>,
+    #[allow(dead_code)]
     pub datum_hash: Option<Vec<u8>>,
+    #[allow(dead_code)]
     pub datum: Option<Vec<u8>>,
 }
 
@@ -120,11 +126,13 @@ impl UtxoData {
     }
 
     /// Check if this UTxO has any native assets
+    #[allow(dead_code)]
     pub fn has_assets(&self) -> bool {
         !self.assets.is_empty()
     }
 
     /// Format as TxHash#Index
+    #[allow(dead_code)]
     pub fn format_ref(&self) -> String {
         format!("{}#{}", hex::encode(&self.tx_hash), self.output_index)
     }
@@ -148,6 +156,7 @@ impl AssetData {
     }
 
     /// Get the asset fingerprint (policy_id + asset_name hex)
+    #[allow(dead_code)]
     pub fn fingerprint(&self) -> String {
         format!("{}.{}", hex::encode(&self.policy_id), hex::encode(&self.asset_name))
     }

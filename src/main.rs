@@ -20,8 +20,7 @@ use std::path::PathBuf;
 use cli::Args;
 use chain_sync::HayateSync;
 use pallas_network::miniprotocols::chainsync::NextResponse;
-use amaru_kernel::Point as AmaruPoint;
-use pallas_network::miniprotocols::Point as PallasPoint;
+use pallas_network::miniprotocols::Point;
 use pallas_traverse::MultiEraBlock;
 
 /// Run chain sync from a node socket
@@ -49,17 +48,15 @@ async fn run_chain_sync(
     // This ensures newly added wallets are indexed from their last known tip (or origin)
     let start_point = if let Some(tip) = storage_handle.get_min_wallet_tip(wallet_ids.clone()).await? {
         info!("Resuming from slot {} (minimum across {} wallets)", tip.slot, wallet_ids.len());
-        let hash_bytes: [u8; 32] = tip.hash.try_into()
-            .map_err(|_| anyhow::anyhow!("Invalid hash length"))?;
-        AmaruPoint::Specific(tip.slot.into(), hash_bytes.into())
+        Point::Specific(tip.slot, tip.hash)
     } else {
         info!("Starting from origin (new wallets or empty database)");
-        AmaruPoint::Origin
+        Point::Origin
     };
 
-    // Connect to node
+    // Connect to node via Unix socket
     let magic = network.magic();
-    let mut sync = HayateSync::connect_unix(&socket_path, magic, start_point).await?;
+    let mut sync = HayateSync::connect(&socket_path, magic, start_point).await?;
     info!("✅ Connected to Cardano node");
 
     // Create block processor with storage handle
@@ -82,72 +79,73 @@ async fn run_chain_sync(
     info!("🔄 Starting block processing...");
 
     // Process blocks - loop until shutdown signal
+    let mut shutdown = Box::pin(tokio::signal::ctrl_c());
     let mut awaiting = false;
     let result: anyhow::Result<()> = loop {
         tokio::select! {
-            // Handle Ctrl+C for graceful shutdown
-            _ = tokio::signal::ctrl_c() => {
+            _ = &mut shutdown => {
                 info!("🛑 Received shutdown signal, saving tips...");
                 break Ok(());
             }
-
-            // Process next block
+            _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)), if awaiting => {
+                // When awaiting, just sleep and continue
+                continue;
+            }
             next = sync.request_next(), if !awaiting => {
-                match next? {
-                    NextResponse::RollForward(block_bytes, _tip) => {
-                        awaiting = false;
-                        // Parse block to get slot and hash
-                        let block = MultiEraBlock::decode(&block_bytes)?;
-                        let slot = block.slot();
-                        let hash = block.hash();
+                let next = next?;
 
-                        // Process block
-                        match processor.process_block(&block_bytes, slot, hash.as_ref()).await {
-                            Ok(_stats) => {
-                                // Only log progress every 1000 blocks to reduce overhead
-                                // The processor already logs every 100 blocks with more detail
+        // Process the response
+        match next {
+            NextResponse::RollForward(block_bytes, _tip) => {
+                awaiting = false;
+                // Parse block to get slot and hash
+                let block = MultiEraBlock::decode(&block_bytes)?;
+                let slot = block.slot();
+                let hash = block.hash();
 
-                                // Broadcast block update
-                                indexer.broadcast_block(indexer::BlockUpdate {
-                                    network: network.clone(),
-                                    height: 0, // TODO: track height
-                                    slot,
-                                    hash: hash.as_ref().to_vec(),
-                                    tx_hashes: Vec::new(), // TODO: collect tx hashes
-                                });
-                            }
-                            Err(e) => {
-                                tracing::error!("Error processing block at slot {}: {}", slot, e);
-                                continue;
-                            }
-                        }
+                // Process block
+                match processor.process_block(&block_bytes, slot, hash.as_ref()).await {
+                    Ok(_stats) => {
+                        // Broadcast block update
+                        indexer.broadcast_block(indexer::BlockUpdate {
+                            network: network.clone(),
+                            height: 0, // TODO: track height
+                            slot,
+                            hash: hash.as_ref().to_vec(),
+                            tx_hashes: Vec::new(), // TODO: collect tx hashes
+                        });
                     }
-                    NextResponse::RollBackward(point, _tip) => {
-                        awaiting = false;
-                        info!("⚠️  Rollback to {:?}", point);
-                        match point {
-                            PallasPoint::Specific(slot, _) => {
-                                match processor.rollback_to(slot).await {
-                                    Ok(count) => info!("✓ Rolled back {} blocks", count),
-                                    Err(e) => tracing::error!("Failed to rollback: {}", e),
-                                }
-                            }
-                            PallasPoint::Origin => {
-                                info!("Rollback to origin requested");
-                                match processor.rollback_to(0).await {
-                                    Ok(count) => info!("✓ Rolled back {} blocks to origin", count),
-                                    Err(e) => tracing::error!("Failed to rollback to origin: {}", e),
-                                }
-                            }
-                        }
-                    }
-                    NextResponse::Await => {
-                        info!("Caught up, waiting for new blocks...");
-                        awaiting = true;
-                        tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                    Err(e) => {
+                        tracing::error!("Error processing block at slot {}: {}", slot, e);
+                        continue;
                     }
                 }
             }
+            NextResponse::RollBackward(point, _tip) => {
+                awaiting = false;
+                info!("⚠️  Rollback to {:?}", point);
+                match point {
+                    Point::Specific(slot, _) => {
+                        match processor.rollback_to(slot).await {
+                            Ok(count) => info!("✓ Rolled back {} blocks", count),
+                            Err(e) => tracing::error!("Failed to rollback: {}", e),
+                        }
+                    }
+                    Point::Origin => {
+                        info!("Rollback to origin requested");
+                        match processor.rollback_to(0).await {
+                            Ok(count) => info!("✓ Rolled back {} blocks to origin", count),
+                            Err(e) => tracing::error!("Failed to rollback to origin: {}", e),
+                        }
+                    }
+                }
+            }
+            NextResponse::Await => {
+                info!("Caught up, waiting for new blocks...");
+                awaiting = true;
+                }
+            }
+        }
         }
     };
 

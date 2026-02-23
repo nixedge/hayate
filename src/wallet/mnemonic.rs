@@ -4,6 +4,7 @@ use bip39::{Language, Mnemonic};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
+#[allow(dead_code)]
 pub enum MnemonicError {
     #[error("Failed to generate mnemonic: {0}")]
     GenerationFailed(String),

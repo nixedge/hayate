@@ -432,37 +432,35 @@ impl QueryService for QueryServiceImpl {
 
         // Create on-demand N2C connection
         use crate::chain_sync::HayateSync;
-        use amaru_kernel::{Point, Slot, HeaderHash};
+        use pallas_network::miniprotocols::Point;
 
-        // Convert hash to HeaderHash
-        let hash_array: [u8; 32] = req.hash.clone().try_into()
-            .map_err(|_| Status::invalid_argument("Invalid block hash length (must be 32 bytes)"))?;
-        let header_hash = HeaderHash::from(hash_array);
+        // Convert hash to Vec<u8> for pallas Point
+        let hash_vec = req.hash.clone();
+        if hash_vec.len() != 32 {
+            return Err(Status::invalid_argument("Invalid block hash length (must be 32 bytes)"));
+        }
 
-        let start_point = Point::Specific(Slot::from(slot), header_hash);
+        let start_point = Point::Specific(slot, hash_vec);
 
-        let mut client = HayateSync::connect_unix(socket_path, self.magic, start_point)
+        let mut client = HayateSync::connect(socket_path, self.magic, start_point)
             .await
             .map_err(|e| Status::unavailable(format!("Failed to connect to node: {}", e)))?;
 
         // Request the next block (which should be our target block)
-        let response = client.request_next_block()
+        let response = client.request_next()
             .await
             .map_err(|e| Status::internal(format!("Failed to request block: {}", e)))?;
 
         let block_cbor = match response {
-            Some(pallas_network::miniprotocols::chainsync::NextResponse::RollForward(content, _tip)) => {
-                // BlockContent is a tuple-like struct, access the first field which is the cbor bytes
-                content.0.to_vec()
+            pallas_network::miniprotocols::chainsync::NextResponse::RollForward(content, _tip) => {
+                // Our HayateSync returns Vec<u8> directly
+                content
             }
-            Some(pallas_network::miniprotocols::chainsync::NextResponse::RollBackward(_point, _tip)) => {
+            pallas_network::miniprotocols::chainsync::NextResponse::RollBackward(_point, _tip) => {
                 return Err(Status::internal("Unexpected rollback response"));
             }
-            Some(pallas_network::miniprotocols::chainsync::NextResponse::Await) => {
+            pallas_network::miniprotocols::chainsync::NextResponse::Await => {
                 return Err(Status::internal("Node has no more blocks (unexpected Await)"));
-            }
-            None => {
-                return Err(Status::internal("No block returned from node"));
             }
         };
 

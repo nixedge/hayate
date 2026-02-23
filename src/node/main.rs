@@ -9,10 +9,10 @@ use anyhow::Result;
 use hayate::node::{NodeStorage, UtxoEntry, slot_to_epoch};
 use hayate::indexer::Network;
 use hayate::chain_sync::HayateSync;
-use amaru_kernel::Point;
+use pallas_network::miniprotocols::Point;
 use pallas_network::miniprotocols::chainsync::NextResponse;
 use pallas_crypto::nonce::generate_rolling_nonce;
-use amaru_kernel::Hash;
+use pallas_crypto::hash::Hash;
 
 #[derive(Parser, Debug)]
 #[command(name = "hayate-node")]
@@ -101,16 +101,14 @@ async fn main() -> Result<()> {
     // Connect to node via chain sync
     let start_point = if let Some((tip_slot, tip_hash)) = storage.get_chain_tip()? {
         info!("Resuming from slot {}", tip_slot);
-        let hash_bytes: [u8; 32] = tip_hash.try_into()
-            .map_err(|_| anyhow::anyhow!("Invalid hash length"))?;
-        Point::Specific(tip_slot.into(), hash_bytes.into())
+        Point::Specific(tip_slot, tip_hash)
     } else {
         info!("Starting from origin");
         Point::Origin
     };
 
     info!("Connecting to chain sync...");
-    let mut sync = HayateSync::connect_unix(&socket_path, magic, start_point).await?;
+    let mut sync = HayateSync::connect(&socket_path, magic, start_point).await?;
     info!("✅ Connected to Cardano node via chain sync");
 
     // Start processing blocks

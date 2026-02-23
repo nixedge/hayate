@@ -9,6 +9,7 @@ use pallas_crypto::hash::{Hash, Hasher};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
+#[allow(dead_code)]
 pub enum DerivationError {
     #[error("Failed to derive key: {0}")]
     DerivationFailed(String),
@@ -39,7 +40,9 @@ impl Network {
 }
 
 /// HD wallet account
+#[allow(dead_code)]
 pub struct Account {
+    #[allow(dead_code)]
     pub account_index: u32,
     pub payment_key: XPrv,
     pub stake_key: XPrv,
@@ -139,6 +142,7 @@ pub fn derive_payment_address(
 }
 
 /// Derive stake address for an account
+#[allow(dead_code)]
 pub fn derive_stake_address(
     stake_key: &XPrv,
     network: Network,
@@ -169,6 +173,7 @@ fn blake2b_224(data: &[u8]) -> [u8; 28] {
 }
 
 /// Get account xpub from account keys
+#[allow(dead_code)]
 pub fn get_account_xpub(account: &Account) -> String {
     hex::encode(account.payment_key.public().as_ref())
 }

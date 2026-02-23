@@ -42,6 +42,7 @@ impl Gpg {
     }
 
     /// Check if a file is GPG encrypted
+    #[allow(dead_code)]
     pub fn is_encrypted(path: &Path) -> bool {
         // Check file extension
         if path.extension().and_then(|s| s.to_str()) == Some("gpg") {
@@ -57,6 +58,7 @@ impl Gpg {
     }
 
     /// Check for GPG magic bytes
+    #[allow(dead_code)]
     fn has_gpg_magic_bytes(bytes: &[u8]) -> bool {
         if bytes.len() < 2 {
             return false;
@@ -72,6 +74,7 @@ impl Gpg {
     }
 
     /// Encrypt a string with GPG using a recipient
+    #[allow(dead_code)]
     pub fn encrypt_string(data: &str, recipient: &str) -> GpgResult<Vec<u8>> {
         if !Self::is_available() {
             return Err(GpgError::GpgNotAvailable);
@@ -195,6 +198,7 @@ impl Gpg {
     }
 
     /// Decrypt GPG encrypted bytes and return the contents
+    #[allow(dead_code)]
     pub fn decrypt_bytes(data: &[u8]) -> GpgResult<String> {
         if !Self::is_available() {
             return Err(GpgError::GpgNotAvailable);

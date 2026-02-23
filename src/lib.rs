@@ -16,5 +16,5 @@ pub mod node;  // Full node with ledger state snapshots
 
 pub use indexer::{HayateIndexer, Network, NetworkStorage, ChainTip, BlockProcessor, BlockStats};
 pub use config::HayateConfig;
-pub use chain_sync::{HayateSync, NodeConnection};
+pub use chain_sync::HayateSync;
 pub use wallet::{WalletStorage, WalletMetadata};
