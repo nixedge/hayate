@@ -148,7 +148,10 @@ async fn run_chain_sync(
                     info!("🔵 Caught up - waiting for new blocks...");
                     is_caught_up = true;
                 }
-                // Agency has shifted to server, next iteration will call await_next()
+                // The protocol state machine requires us to call recv_while_must_reply()
+                // after receiving Await, but that call should block until a message arrives.
+                // However, to avoid busy-looping if it returns immediately, add a small delay.
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
                 }
             }
             }
