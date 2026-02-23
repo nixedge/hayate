@@ -196,6 +196,70 @@ async fn handle_config_command(config_cmd: &cli::ConfigCommand) -> anyhow::Resul
     }
 }
 
+async fn handle_rollback_command(
+    epoch: u64,
+    network_str: Option<String>,
+    db_path_str: Option<String>,
+) -> anyhow::Result<()> {
+    use indexer::block_processor::BlockProcessor;
+
+    // Parse network
+    let network = if let Some(net_str) = network_str {
+        Network::from_str(&net_str)
+            .ok_or_else(|| anyhow::anyhow!("Invalid network: {}", net_str))?
+    } else {
+        Network::Preview // Default
+    };
+
+    // Determine database path
+    let db_path = if let Some(path) = db_path_str {
+        PathBuf::from(path)
+    } else {
+        PathBuf::from("./.hayate")
+    };
+
+    info!("🔄 Rolling back {} to epoch {}", network.as_str(), epoch);
+
+    // Calculate target slot from epoch
+    let target_slot = epoch_to_slot(epoch, &network);
+    info!("Target slot: {} (epoch {})", target_slot, epoch);
+
+    // Open network storage
+    let storage = indexer::NetworkStorage::open(db_path.clone(), network.clone())?;
+    let (manager, handle) = indexer::StorageManager::new(storage);
+
+    // Spawn storage manager
+    tokio::spawn(async move {
+        manager.run().await;
+    });
+
+    // Create block processor
+    let mut processor = BlockProcessor::new(handle.clone()).await?;
+
+    // Perform rollback
+    let count = processor.rollback_to(target_slot).await?;
+
+    info!("✅ Rolled back {} blocks", count);
+    info!("💾 Saving chain tips...");
+
+    // Save tips
+    processor.save_current_tips().await?;
+
+    info!("✅ Rollback complete");
+
+    Ok(())
+}
+
+fn epoch_to_slot(epoch: u64, network: &Network) -> u64 {
+    let epoch_length = match network {
+        Network::Mainnet | Network::Preprod => 432_000,
+        Network::Preview => 86_400,
+        Network::SanchoNet => 86_400,
+        Network::Custom(_) => 432_000,
+    };
+    epoch * epoch_length
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Initialize logging
@@ -216,6 +280,9 @@ async fn main() -> anyhow::Result<()> {
         }
         Some(cli::Command::Config { config_cmd }) => {
             return handle_config_command(config_cmd).await;
+        }
+        Some(cli::Command::Rollback { epoch, network, db_path }) => {
+            return handle_rollback_command(*epoch, network.clone(), db_path.clone()).await;
         }
         Some(cli::Command::Sync { .. }) | None => {
             // Continue with sync (default behavior)

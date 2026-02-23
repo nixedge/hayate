@@ -54,6 +54,21 @@ pub enum Command {
         #[command(subcommand)]
         config_cmd: ConfigCommand,
     },
+
+    /// Rollback to a specific epoch
+    Rollback {
+        /// Target epoch to rollback to
+        #[arg(short, long)]
+        epoch: u64,
+
+        /// Network to rollback (preview, preprod, mainnet, sanchonet)
+        #[arg(short, long)]
+        network: Option<String>,
+
+        /// Database path
+        #[arg(short = 'd', long)]
+        db_path: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
