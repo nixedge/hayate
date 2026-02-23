@@ -552,6 +552,10 @@ impl QueryServiceImpl {
         let spend_data = event_json.get("spend_data")
             .ok_or_else(|| Status::internal("Missing spend_data in SPENT event"))?;
 
+        // Extract UTxO data to build the UTxO object
+        let utxo_data = event_json.get("utxo_data")
+            .ok_or_else(|| Status::internal("Missing utxo_data in SPENT event"))?;
+
         // Parse utxo_key to get tx_hash and output_index
         let parts: Vec<&str> = utxo_key.split('#').collect();
         if parts.len() != 2 {
@@ -563,6 +567,7 @@ impl QueryServiceImpl {
         let output_index = parts[1].parse::<u32>()
             .map_err(|_| Status::internal("Invalid output_index in utxo_key"))?;
 
+        // Extract spend information
         let slot = spend_data.get("spent_at_slot")
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
@@ -585,6 +590,47 @@ impl QueryServiceImpl {
             .and_then(|s| hex::decode(s).ok())
             .unwrap_or_default();
 
+        // Build UTxO object from the original UTxO data
+        let address = utxo_data.get("address")
+            .and_then(|v| v.as_str())
+            .and_then(|s| hex::decode(s).ok())
+            .ok_or_else(|| Status::internal("Invalid address in utxo_data"))?;
+
+        let amount = utxo_data.get("amount")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| Status::internal("Invalid amount in utxo_data"))?;
+
+        let created_at_slot = utxo_data.get("slot")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+
+        let created_at_block_hash = utxo_data.get("block_hash")
+            .and_then(|v| v.as_str())
+            .and_then(|s| hex::decode(s).ok())
+            .unwrap_or_default();
+
+        let created_at_tx_index = utxo_data.get("tx_index")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as u32;
+
+        let created_at_block_timestamp = utxo_data.get("block_timestamp")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+
+        let utxo = query::Utxo {
+            tx_hash: tx_hash.clone(),
+            output_index,
+            address,
+            amount,
+            assets: vec![], // TODO: Parse assets from utxo_data
+            datum_hash: vec![],
+            datum: vec![],
+            created_at_slot,
+            created_at_block_hash,
+            created_at_tx_index,
+            created_at_block_timestamp,
+        };
+
         Ok(query::UtxoEvent {
             event_type: query::utxo_event::EventType::Spent as i32,
             tx_hash,
@@ -593,7 +639,7 @@ impl QueryServiceImpl {
             block_hash,
             tx_index,
             block_timestamp,
-            utxo: None,
+            utxo: Some(utxo),
             spent_by_tx_hash,
         })
     }

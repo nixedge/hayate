@@ -93,7 +93,7 @@ struct RollbackInfo {
     block_hash: Vec<u8>,
     timestamp: u64,
     utxos_created: Vec<String>,  // Keys that were created
-    utxos_spent: Vec<(String, Vec<u8>)>,  // Keys that were spent, with their data
+    utxos_spent: Vec<(String, Vec<u8>, Vec<u8>)>,  // Keys that were spent, with their data and spend metadata
     spent_utxos_recorded: Vec<String>,  // Keys for which we recorded spend events
 }
 
@@ -221,14 +221,17 @@ impl BlockProcessor {
         }
 
         // Write SPENT events
-        for utxo_key in &rollback_info.spent_utxos_recorded {
-            // Get spent UTxO data via get_utxo (which reads from spent_utxo_index internally)
-            // Actually, we need a method to read from spent_utxo_index directly
-            // For now, reconstruct from the rollback info
+        for (utxo_key, utxo_data, spend_event_bytes) in &rollback_info.utxos_spent {
+            // Parse UTxO data and spend metadata to include in the event
+            let utxo_json: serde_json::Value = serde_json::from_slice(utxo_data)?;
+            let spend_data: serde_json::Value = serde_json::from_slice(spend_event_bytes)?;
+
             let event_key = format!("slot#{:020}#{:010}", slot, event_index);
             let event_data = serde_json::json!({
                 "event_type": "SPENT",
                 "utxo_key": utxo_key,
+                "utxo_data": utxo_json,
+                "spend_data": spend_data,
             });
             let event_bytes = serde_json::to_vec(&event_data)?;
             self.storage.insert_block_event(event_key, event_bytes).await?;
@@ -321,7 +324,7 @@ impl BlockProcessor {
         tracing::debug!("Rolling back block at slot {}", info.slot);
 
         // Restore spent UTxOs
-        for (utxo_key, utxo_data) in &info.utxos_spent {
+        for (utxo_key, utxo_data, _spend_event_bytes) in &info.utxos_spent {
             self.storage.insert_utxo(utxo_key.clone(), utxo_data.clone()).await?;
 
             // Restore balance and address index
@@ -442,9 +445,6 @@ impl BlockProcessor {
 
         // Check if this UTxO exists in our storage
         if let Some(utxo_data) = self.storage.get_utxo(utxo_key.clone()).await? {
-            // Save for rollback
-            rollback_info.utxos_spent.push((utxo_key.clone(), utxo_data.clone()));
-
             // Parse the stored UTxO data
             if let Ok(utxo_json) = serde_json::from_slice::<serde_json::Value>(&utxo_data) {
                 // Extract address and amount
@@ -473,7 +473,10 @@ impl BlockProcessor {
             });
 
             let spend_event_bytes = serde_json::to_vec(&spend_event)?;
-            self.storage.insert_spent_utxo(utxo_key.clone(), spend_event_bytes).await?;
+            self.storage.insert_spent_utxo(utxo_key.clone(), spend_event_bytes.clone()).await?;
+
+            // Save for rollback (UTxO data + spend metadata)
+            rollback_info.utxos_spent.push((utxo_key.clone(), utxo_data.clone(), spend_event_bytes));
 
             // Save spend event for rollback (so we can remove it if we rollback)
             rollback_info.spent_utxos_recorded.push(utxo_key.clone());
