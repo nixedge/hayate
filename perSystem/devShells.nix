@@ -35,6 +35,7 @@
           jq
           fd
           ripgrep
+          grpcurl
 
           # Tree formatter
           config.treefmt.build.wrapper
@@ -46,11 +47,13 @@
           echo "Rust: $(rustc --version)"
           echo "Cargo: $(cargo --version)"
           echo "Protoc: $(protoc --version)"
+          echo "grpcurl: $(grpcurl --version 2>&1 | head -1)"
           echo ""
           echo "Commands:"
-          echo "  just --list    # Show all commands"
-          echo "  just run       # Run the indexer"
-          echo "  just test      # Run tests"
+          echo "  just --list              # Show all commands"
+          echo "  just run                 # Run the indexer"
+          echo "  just test                # Run tests"
+          echo "  ./scripts/debug-grpc.sh  # gRPC debugging tools"
         '';
       };
   };
