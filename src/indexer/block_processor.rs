@@ -239,7 +239,9 @@ impl BlockProcessor {
         }
 
         // Store block metadata in the block hash index for GetBlockByHash queries
-        self.storage.store_block_metadata(block_hash.to_vec(), slot, block_timestamp).await?;
+        // Extract previous block hash from header (None for genesis/epoch boundary blocks)
+        let prev_hash = block.header().previous_hash().map(|h| h.to_vec());
+        self.storage.store_block_metadata(block_hash.to_vec(), slot, block_timestamp, prev_hash).await?;
 
         self.current_slot = slot;
         self.blocks_processed += 1;
@@ -341,6 +343,9 @@ impl BlockProcessor {
     /// Roll back a single block using rollback info
     async fn rollback_block(&mut self, info: &RollbackInfo) -> Result<()> {
         tracing::debug!("Rolling back block at slot {}", info.slot);
+
+        // Delete block metadata from the block hash index
+        self.storage.delete_block_metadata(info.block_hash.clone()).await?;
 
         // Restore spent UTxOs
         for (utxo_key, utxo_data, _spend_event_bytes) in &info.utxos_spent {

@@ -172,13 +172,20 @@ pub enum StorageCommand {
         block_hash: Vec<u8>,
         slot: u64,
         timestamp: u64,
+        prev_hash: Option<Vec<u8>>,
         response: oneshot::Sender<Result<()>>,
     },
 
     /// Get block metadata
     GetBlockMetadata {
         block_hash: Vec<u8>,
-        response: oneshot::Sender<Result<Option<(u64, u64)>>>,
+        response: oneshot::Sender<Result<Option<(u64, u64, Option<Vec<u8>>)>>>,
+    },
+
+    /// Delete block metadata
+    DeleteBlockMetadata {
+        block_hash: Vec<u8>,
+        response: oneshot::Sender<Result<()>>,
     },
 
     /// Scan block events by prefix (for range queries)
@@ -295,9 +302,16 @@ impl StorageHandle {
     }
 
     /// Get block metadata
-    pub async fn get_block_metadata(&self, block_hash: Vec<u8>) -> Result<Option<(u64, u64)>> {
+    pub async fn get_block_metadata(&self, block_hash: Vec<u8>) -> Result<Option<(u64, u64, Option<Vec<u8>>)>> {
         let (tx, rx) = oneshot::channel();
         self.sender.send(StorageCommand::GetBlockMetadata { block_hash, response: tx })?;
+        rx.await?
+    }
+
+    /// Delete block metadata
+    pub async fn delete_block_metadata(&self, block_hash: Vec<u8>) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.sender.send(StorageCommand::DeleteBlockMetadata { block_hash, response: tx })?;
         rx.await?
     }
 
@@ -414,9 +428,9 @@ impl StorageHandle {
     }
 
     /// Store block metadata
-    pub async fn store_block_metadata(&self, block_hash: Vec<u8>, slot: u64, timestamp: u64) -> Result<()> {
+    pub async fn store_block_metadata(&self, block_hash: Vec<u8>, slot: u64, timestamp: u64, prev_hash: Option<Vec<u8>>) -> Result<()> {
         let (tx, rx) = oneshot::channel();
-        self.sender.send(StorageCommand::StoreBlockMetadata { block_hash, slot, timestamp, response: tx })?;
+        self.sender.send(StorageCommand::StoreBlockMetadata { block_hash, slot, timestamp, prev_hash, response: tx })?;
         rx.await?
     }
 }
@@ -686,9 +700,9 @@ impl StorageManager {
                 let _ = response.send(result);
             }
 
-            StorageCommand::StoreBlockMetadata { block_hash, slot, timestamp, response } => {
+            StorageCommand::StoreBlockMetadata { block_hash, slot, timestamp, prev_hash, response } => {
                 let result = if let Some(ref mut storage) = self.storage {
-                    storage.store_block_metadata(&block_hash, slot, timestamp)
+                    storage.store_block_metadata(&block_hash, slot, timestamp, prev_hash)
                 } else {
                     Err(anyhow::anyhow!("Storage not available"))
                 };
@@ -698,6 +712,15 @@ impl StorageManager {
             StorageCommand::GetBlockMetadata { block_hash, response } => {
                 let result = if let Some(ref storage) = self.storage {
                     storage.get_block_metadata(&block_hash)
+                } else {
+                    Err(anyhow::anyhow!("Storage not available"))
+                };
+                let _ = response.send(result);
+            }
+
+            StorageCommand::DeleteBlockMetadata { block_hash, response } => {
+                let result = if let Some(ref mut storage) = self.storage {
+                    storage.delete_block_metadata(&block_hash)
                 } else {
                     Err(anyhow::anyhow!("Storage not available"))
                 };

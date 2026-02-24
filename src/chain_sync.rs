@@ -24,12 +24,13 @@ impl HayateSync {
 
         // Find intersection point for resume
         let intersection_points = vec![start_point];
-        client.chainsync()
+        let (intersection, tip) = client.chainsync()
             .find_intersect(intersection_points)
             .await
             .context("Failed to find intersection for N2C")?;
 
         tracing::info!("✓ Connected via N2C (Unix socket)");
+        tracing::debug!("Intersection: {:?}, Tip: {:?}", intersection, tip);
 
         Ok(Self { client })
     }
