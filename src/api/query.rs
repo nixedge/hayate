@@ -552,57 +552,121 @@ impl QueryService for QueryServiceImpl {
         let metadata = self.storage.get_block_metadata(req.hash.clone()).await
             .map_err(|e| Status::internal(format!("Failed to query block index: {}", e)))?;
 
-        let (slot, timestamp) = match metadata {
-            Some((s, t)) => (s, t),
+        let (slot, timestamp, prev_hash) = match metadata {
+            Some((s, t, p)) => {
+                tracing::debug!("Found block: slot={}, prev_hash={}",
+                    s, p.as_ref().map(|h| hex::encode(&h[..8])).unwrap_or_else(|| "None".to_string()));
+                (s, t, p)
+            }
             None => {
                 return Err(Status::not_found(format!(
-                    "Block not found: {}",
+                    "Block not found in index: {}",
                     hex::encode(&req.hash)
                 )));
             }
         };
 
-        // Connect to node and fetch the block
+        // Get the parent block hash
+        let parent_hash = prev_hash.ok_or_else(|| {
+            Status::not_found("Cannot fetch genesis/epoch boundary block")
+        })?;
+
+        tracing::debug!("Fetching block at slot {} via N2C chainsync (parent: {})",
+            slot, hex::encode(&parent_hash[..8]));
+
+        // Connect to node via N2C Unix socket
         let socket_path = self.socket_path.as_ref()
             .ok_or_else(|| Status::unavailable("Node socket path not configured"))?;
 
-        tracing::debug!("Fetching block at slot {} from node", slot);
-
-        // Create on-demand N2C connection
         use crate::chain_sync::HayateSync;
-        use pallas_network::miniprotocols::Point;
+        use pallas_network::miniprotocols::{Point, chainsync::NextResponse};
 
-        // Convert hash to Vec<u8> for pallas Point
-        let hash_vec = req.hash.clone();
-        if hash_vec.len() != 32 {
-            return Err(Status::invalid_argument("Invalid block hash length (must be 32 bytes)"));
-        }
+        // Get parent slot from the parent block metadata
+        let parent_metadata = self.storage.get_block_metadata(parent_hash.clone()).await
+            .map_err(|e| Status::internal(format!("Failed to query parent block: {}", e)))?;
 
-        let start_point = Point::Specific(slot, hash_vec);
+        let parent_slot = parent_metadata
+            .ok_or_else(|| Status::not_found("Parent block not found in index"))?
+            .0;
 
-        let mut client = HayateSync::connect(socket_path, self.magic, start_point)
+        tracing::debug!("Parent block: slot={}, hash={}", parent_slot, hex::encode(&parent_hash));
+
+        // Create intersection point at parent block
+        let parent_point = Point::Specific(parent_slot, parent_hash);
+
+        // Connect via N2C and find intersection at parent
+        let mut sync = HayateSync::connect(socket_path, self.magic, parent_point)
             .await
             .map_err(|e| Status::unavailable(format!("Failed to connect to node: {}", e)))?;
 
-        // Request the next block (which should be our target block)
-        let response = client.request_next()
+        // Request next block with timeout
+        // Note: When setting an old intersection, chainsync first sends RollBackward
+        // to acknowledge the intersection, then RollForward with the block on the next call
+        let response = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            sync.request_next()
+        )
             .await
-            .map_err(|e| Status::internal(format!("Failed to request block: {}", e)))?;
+            .map_err(|_| Status::deadline_exceeded("Timeout waiting for block from node"))?
+            .map_err(|e| Status::unavailable(format!("Failed to request next block: {}", e)))?;
 
         let block_cbor = match response {
-            pallas_network::miniprotocols::chainsync::NextResponse::RollForward(content, _tip) => {
-                // Our HayateSync returns Vec<u8> directly
-                content
+            NextResponse::RollForward(block, _tip) => block,
+            NextResponse::RollBackward(_point, _tip) => {
+                // Got rollback acknowledgment, call request_next() again to get the block
+                tracing::debug!("Got RollBackward, calling request_next() again...");
+                let response2 = tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    sync.request_next()
+                )
+                    .await
+                    .map_err(|_| Status::deadline_exceeded("Timeout waiting for block from node"))?
+                    .map_err(|e| Status::unavailable(format!("Failed to request next block: {}", e)))?;
+
+                match response2 {
+                    NextResponse::RollForward(block, _tip) => block,
+                    NextResponse::RollBackward(point, _tip) => {
+                        return Err(Status::not_found(format!(
+                            "Got rollback again to {:?} when fetching block", point
+                        )));
+                    }
+                    NextResponse::Await => {
+                        return Err(Status::unavailable("Node has no block data available"));
+                    }
+                }
             }
-            pallas_network::miniprotocols::chainsync::NextResponse::RollBackward(_point, _tip) => {
-                return Err(Status::internal("Unexpected rollback response"));
-            }
-            pallas_network::miniprotocols::chainsync::NextResponse::Await => {
-                return Err(Status::internal("Node has no more blocks (unexpected Await)"));
+            NextResponse::Await => {
+                return Err(Status::unavailable("Node has no block data available"));
             }
         };
 
-        tracing::debug!("Fetched block: {} bytes", block_cbor.len());
+        tracing::debug!("Fetched block via chainsync: {} bytes", block_cbor.len());
+
+        // Validate that the returned block matches what we requested
+        // This protects against forks that may have occurred during the fetch
+        use pallas_traverse::MultiEraBlock;
+        let returned_block = MultiEraBlock::decode(&block_cbor)
+            .map_err(|e| Status::internal(format!("Failed to decode returned block: {}", e)))?;
+
+        let returned_slot = returned_block.slot();
+        let returned_hash = returned_block.hash();
+
+        if returned_slot != slot {
+            return Err(Status::not_found(format!(
+                "Block validation failed: requested slot {} but got slot {}. Block may have been rolled back due to a fork.",
+                slot, returned_slot
+            )));
+        }
+
+        if returned_hash.as_slice() != req.hash {
+            return Err(Status::not_found(format!(
+                "Block validation failed: requested hash {} but got hash {}. Block may have been rolled back due to a fork.",
+                hex::encode(&req.hash),
+                hex::encode(returned_hash)
+            )));
+        }
+
+        tracing::debug!("Block validation passed: slot={}, hash={}", slot, hex::encode(&req.hash));
 
         Ok(Response::new(GetBlockByHashResponse {
             block_cbor,

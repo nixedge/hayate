@@ -283,10 +283,11 @@ impl NetworkStorage {
     }
 
     /// Store block metadata in the block hash index
-    pub fn store_block_metadata(&mut self, block_hash: &[u8], slot: u64, timestamp: u64) -> Result<()> {
+    pub fn store_block_metadata(&mut self, block_hash: &[u8], slot: u64, timestamp: u64, prev_hash: Option<Vec<u8>>) -> Result<()> {
         let metadata = serde_json::json!({
             "slot": slot,
             "timestamp": timestamp,
+            "prev_hash": prev_hash.map(hex::encode),
         });
 
         self.block_hash_index.insert(
@@ -297,16 +298,25 @@ impl NetworkStorage {
         Ok(())
     }
 
-    /// Get block metadata by hash
-    pub fn get_block_metadata(&self, block_hash: &[u8]) -> Result<Option<(u64, u64)>> {
+    /// Get block metadata by hash - returns (slot, timestamp, prev_hash)
+    pub fn get_block_metadata(&self, block_hash: &[u8]) -> Result<Option<(u64, u64, Option<Vec<u8>>)>> {
         if let Some(value) = self.block_hash_index.get(&Key::from(block_hash))? {
             let metadata: serde_json::Value = serde_json::from_slice(value.as_ref())?;
             let slot = metadata["slot"].as_u64().unwrap_or(0);
             let timestamp = metadata["timestamp"].as_u64().unwrap_or(0);
-            Ok(Some((slot, timestamp)))
+            let prev_hash = metadata["prev_hash"]
+                .as_str()
+                .and_then(|s| hex::decode(s).ok());
+            Ok(Some((slot, timestamp, prev_hash)))
         } else {
             Ok(None)
         }
+    }
+
+    /// Delete block metadata by hash
+    pub fn delete_block_metadata(&mut self, block_hash: &[u8]) -> Result<()> {
+        self.block_hash_index.delete(&Key::from(block_hash))?;
+        Ok(())
     }
 
     /// Add a UTxO to the address index
