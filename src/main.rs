@@ -265,9 +265,11 @@ async fn main() -> anyhow::Result<()> {
     // Initialize logging
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("hayate=info".parse()?)
-                .add_directive("h2=warn".parse()?)  // Reduce gRPC noise
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| {
+                    // Default to info if RUST_LOG not set, but allow RUST_LOG to override
+                    tracing_subscriber::EnvFilter::new("hayate=info,h2=warn")
+                })
         )
         .init();
     
