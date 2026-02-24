@@ -100,11 +100,18 @@ async fn run_chain_sync(
         // Process the response
         match next {
             NextResponse::RollForward(block_bytes, _tip) => {
-                is_caught_up = false;
                 // Parse block to get slot and hash
                 let block = MultiEraBlock::decode(&block_bytes)?;
                 let slot = block.slot();
                 let hash = block.hash();
+
+                // Log new blocks only when we were previously caught up (waiting at tip)
+                // This means we only log blocks that extend the chain after we've been idle
+                if is_caught_up {
+                    info!("📦 New block at slot {} - {}", slot, hex::encode(&hash.as_ref()[..8]));
+                }
+
+                is_caught_up = false;
 
                 // Process block
                 match processor.process_block(&block_bytes, slot, hash.as_ref()).await {
