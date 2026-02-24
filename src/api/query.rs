@@ -204,42 +204,155 @@ impl QueryService for QueryServiceImpl {
 
         tracing::debug!("SearchUtxos with pattern: {}", req.pattern);
 
-        let utxos = Vec::new();
-
-        // Pattern matching:
-        // - "*" = all UTxOs
-        // - hex prefix = addresses starting with prefix
         let pattern = req.pattern.to_lowercase();
 
-        // We need to scan the address index to find matching addresses
-        // This is not ideal for large databases, but works for wallet-scale data
-        // TODO: Add more efficient pattern matching using LSM tree range queries
+        // Check if pattern is a valid hex string (policy ID or address prefix)
+        if pattern != "*" && !pattern.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(Status::invalid_argument("Pattern must be hex or '*'"));
+        }
 
-        // For now, we'll implement a simple linear scan
-        // In a production system, we'd want a more efficient indexing strategy
+        let mut utxos = Vec::new();
+
+        // Pattern matching:
+        // - "*" = all UTxOs (not implemented)
+        // - hex string = could be policy ID or address prefix
 
         if pattern == "*" {
-            // Return all UTxOs - this could be expensive!
-            tracing::warn!("Returning all UTxOs - this may be slow for large datasets");
-
-            // We need to iterate through all addresses in the index
-            // Unfortunately, LSM trees don't have a simple iteration API
-            // For now, return empty list with a message
             tracing::warn!("Full UTxO scan not yet implemented");
-
             return Ok(Response::new(SearchUtxosResponse {
                 items: vec![],
             }));
         }
 
-        // Check if pattern is a valid hex prefix
-        if !pattern.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Err(Status::invalid_argument("Pattern must be hex or '*'"));
-        }
+        // Try to interpret as policy ID (56 hex chars = 28 bytes)
+        if pattern.len() == 56 {
+            tracing::info!("Interpreting pattern as policy ID: {}", pattern);
 
-        // Search for addresses matching the prefix
-        // This is a stub - full implementation would require scanning the address index
-        tracing::info!("Pattern-based search for addresses starting with: {}", pattern);
+            // Get all transactions containing this policy ID
+            let tx_hashes = self.storage.get_txs_for_policy(pattern.clone()).await
+                .map_err(|e| Status::internal(format!("Failed to query policy index: {}", e)))?;
+
+            tracing::debug!("Found {} transactions for policy {}", tx_hashes.len(), pattern);
+
+            // For each transaction, try to find UTxOs containing the policy
+            for tx_hash in tx_hashes {
+                // Try reasonable output indices (most transactions have < 100 outputs)
+                for output_idx in 0..100 {
+                    let utxo_key = format!("{}#{}", tx_hash, output_idx);
+
+                    if let Some(utxo_data) = self.storage.get_utxo(utxo_key.clone()).await
+                        .map_err(|e| Status::internal(format!("Failed to read UTxO: {}", e)))? {
+
+                        // Parse UTxO JSON data
+                        let utxo_json: serde_json::Value = serde_json::from_slice(utxo_data.as_ref())
+                            .map_err(|e| Status::internal(format!("Failed to parse UTxO data: {}", e)))?;
+
+                        // Check if this UTxO contains the policy ID we're looking for
+                        let contains_policy = if let Some(assets_obj) = utxo_json.get("assets").and_then(|v| v.as_object()) {
+                            assets_obj.keys().any(|asset_key| {
+                                // asset_key format: "policy_id.asset_name"
+                                asset_key.starts_with(&pattern)
+                            })
+                        } else {
+                            false
+                        };
+
+                        if !contains_policy {
+                            continue;
+                        }
+
+                        // Extract fields for UTxO response
+                        let tx_hash_bytes = utxo_json.get("tx_hash")
+                            .and_then(|v| v.as_str())
+                            .and_then(|s| hex::decode(s).ok())
+                            .ok_or_else(|| Status::internal("Invalid tx_hash"))?;
+
+                        let output_index = utxo_json.get("output_index")
+                            .and_then(|v| v.as_u64())
+                            .ok_or_else(|| Status::internal("Invalid output_index"))? as u32;
+
+                        let address = utxo_json.get("address")
+                            .and_then(|v| v.as_str())
+                            .and_then(|s| hex::decode(s).ok())
+                            .ok_or_else(|| Status::internal("Invalid address"))?;
+
+                        let amount = utxo_json.get("amount")
+                            .and_then(|v| v.as_u64())
+                            .ok_or_else(|| Status::internal("Invalid amount"))?;
+
+                        // Extract multi-assets
+                        let assets = if let Some(assets_obj) = utxo_json.get("assets").and_then(|v| v.as_object()) {
+                            assets_obj.iter().filter_map(|(asset_key, amount_val)| {
+                                let amount = amount_val.as_u64()?;
+                                let (policy_hex, asset_name_hex) = asset_key.split_once('.')?;
+                                let policy_id = hex::decode(policy_hex).ok()?;
+                                let asset_name = hex::decode(asset_name_hex).ok()?;
+
+                                Some(query::Asset {
+                                    policy_id,
+                                    asset_name,
+                                    amount,
+                                })
+                            }).collect()
+                        } else {
+                            vec![]
+                        };
+
+                        // Extract datum fields
+                        let datum_hash = utxo_json.get("datum_hash")
+                            .and_then(|v| v.as_str())
+                            .and_then(|s| hex::decode(s).ok())
+                            .unwrap_or_default();
+
+                        let datum = utxo_json.get("datum")
+                            .and_then(|v| v.as_str())
+                            .and_then(|s| hex::decode(s).ok())
+                            .unwrap_or_default();
+
+                        // Extract creation metadata
+                        let created_at_slot = utxo_json.get("slot")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+
+                        let created_at_block_hash = utxo_json.get("block_hash")
+                            .and_then(|v| v.as_str())
+                            .and_then(|s| hex::decode(s).ok())
+                            .unwrap_or_default();
+
+                        let created_at_tx_index = utxo_json.get("tx_index")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0) as u32;
+
+                        let created_at_block_timestamp = utxo_json.get("block_timestamp")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+
+                        utxos.push(query::Utxo {
+                            tx_hash: tx_hash_bytes,
+                            output_index,
+                            address,
+                            amount,
+                            assets,
+                            datum_hash,
+                            datum,
+                            created_at_slot,
+                            created_at_block_hash,
+                            created_at_tx_index,
+                            created_at_block_timestamp,
+                        });
+                    } else {
+                        // No more outputs for this transaction
+                        break;
+                    }
+                }
+            }
+
+            tracing::debug!("Returning {} UTxOs for policy {}", utxos.len(), pattern);
+        } else {
+            // Treat as address prefix
+            tracing::info!("Pattern-based search for addresses starting with: {}", pattern);
+            tracing::warn!("Address prefix search not yet implemented");
+        }
 
         Ok(Response::new(SearchUtxosResponse {
             items: utxos,
