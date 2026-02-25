@@ -25,6 +25,20 @@ pub struct QueryServiceImpl {
     magic: u64,
 }
 
+/// Helper function to format address as bech32 for logging
+/// Automatically detects mainnet (addr) vs testnet (addr_test) from the address bytes
+fn format_address_bech32(addr_hex: &str) -> String {
+    // Try to decode and format as bech32, fall back to hex on error
+    hex::decode(addr_hex)
+        .ok()
+        .and_then(|bytes| {
+            use pallas_addresses::Address;
+            Address::from_bytes(&bytes).ok()
+        })
+        .and_then(|addr| addr.to_bech32().ok())
+        .unwrap_or_else(|| addr_hex.to_string())
+}
+
 impl QueryServiceImpl {
     #[allow(dead_code)]
     pub fn new(storage: StorageHandle) -> Self {
@@ -57,7 +71,7 @@ impl QueryService for QueryServiceImpl {
             req.addresses.len(),
             req.addresses.iter()
                 .take(5)
-                .map(|a| hex::encode(a))
+                .map(|a| format_address_bech32(&hex::encode(a)))
                 .collect::<Vec<_>>()
                 .join(", ")
         );
@@ -71,13 +85,13 @@ impl QueryService for QueryServiceImpl {
 
         // Use address index to efficiently find UTxOs
         for addr_hex in &address_hexes {
-            tracing::debug!("Looking up UTxOs for address: {}", addr_hex);
+            tracing::debug!("Looking up UTxOs for address: {}", format_address_bech32(addr_hex));
 
             // Get UTxO keys for this address from index
             let utxo_keys = self.storage.get_utxos_for_address(addr_hex.clone()).await
                 .map_err(|e| Status::internal(format!("Failed to query address index: {}", e)))?;
 
-            tracing::debug!("Found {} UTxOs for address {}", utxo_keys.len(), addr_hex);
+            tracing::debug!("Found {} UTxOs for address {}", utxo_keys.len(), format_address_bech32(addr_hex));
 
             // Retrieve full UTxO data for each key
             for utxo_key in utxo_keys {
@@ -419,7 +433,7 @@ impl QueryService for QueryServiceImpl {
         let req = request.into_inner();
 
         let address_hex = hex::encode(&req.address);
-        tracing::debug!("GetTxHistory for address: {}", address_hex);
+        tracing::debug!("GetTxHistory for address: {}", format_address_bech32(&address_hex));
 
         // Get transaction hashes for this address
         let tx_hashes_hex = self.storage.get_tx_history_for_address(address_hex).await
