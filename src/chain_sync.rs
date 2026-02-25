@@ -78,4 +78,12 @@ impl HayateSync {
             NextResponse::Await => Ok(NextResponse::Await),
         }
     }
+
+    /// Shutdown the connection and release resources
+    ///
+    /// This should be called explicitly to properly close the Unix socket connection
+    /// and prevent file descriptor leaks
+    pub async fn shutdown(self) {
+        self.client.abort().await;
+    }
 }

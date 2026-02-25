@@ -599,81 +599,90 @@ impl QueryService for QueryServiceImpl {
             .await
             .map_err(|e| Status::unavailable(format!("Failed to connect to node: {}", e)))?;
 
-        // Request next block with timeout
-        // Note: When setting an old intersection, chainsync first sends RollBackward
-        // to acknowledge the intersection, then RollForward with the block on the next call
-        let response = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            sync.request_next()
-        )
-            .await
-            .map_err(|_| Status::deadline_exceeded("Timeout waiting for block from node"))?
-            .map_err(|e| Status::unavailable(format!("Failed to request next block: {}", e)))?;
+        // Wrap the rest in a closure to ensure cleanup happens in all paths
+        let result = async {
+            // Request next block with timeout
+            // Note: When setting an old intersection, chainsync first sends RollBackward
+            // to acknowledge the intersection, then RollForward with the block on the next call
+            let response = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                sync.request_next()
+            )
+                .await
+                .map_err(|_| Status::deadline_exceeded("Timeout waiting for block from node"))?
+                .map_err(|e| Status::unavailable(format!("Failed to request next block: {}", e)))?;
 
-        let block_cbor = match response {
-            NextResponse::RollForward(block, _tip) => block,
-            NextResponse::RollBackward(_point, _tip) => {
-                // Got rollback acknowledgment, call request_next() again to get the block
-                tracing::debug!("Got RollBackward, calling request_next() again...");
-                let response2 = tokio::time::timeout(
-                    std::time::Duration::from_secs(10),
-                    sync.request_next()
-                )
-                    .await
-                    .map_err(|_| Status::deadline_exceeded("Timeout waiting for block from node"))?
-                    .map_err(|e| Status::unavailable(format!("Failed to request next block: {}", e)))?;
+            let block_cbor = match response {
+                NextResponse::RollForward(block, _tip) => block,
+                NextResponse::RollBackward(_point, _tip) => {
+                    // Got rollback acknowledgment, call request_next() again to get the block
+                    tracing::debug!("Got RollBackward, calling request_next() again...");
+                    let response2 = tokio::time::timeout(
+                        std::time::Duration::from_secs(10),
+                        sync.request_next()
+                    )
+                        .await
+                        .map_err(|_| Status::deadline_exceeded("Timeout waiting for block from node"))?
+                        .map_err(|e| Status::unavailable(format!("Failed to request next block: {}", e)))?;
 
-                match response2 {
-                    NextResponse::RollForward(block, _tip) => block,
-                    NextResponse::RollBackward(point, _tip) => {
-                        return Err(Status::not_found(format!(
-                            "Got rollback again to {:?} when fetching block", point
-                        )));
-                    }
-                    NextResponse::Await => {
-                        return Err(Status::unavailable("Node has no block data available"));
+                    match response2 {
+                        NextResponse::RollForward(block, _tip) => block,
+                        NextResponse::RollBackward(point, _tip) => {
+                            return Err(Status::not_found(format!(
+                                "Got rollback again to {:?} when fetching block", point
+                            )));
+                        }
+                        NextResponse::Await => {
+                            return Err(Status::unavailable("Node has no block data available"));
+                        }
                     }
                 }
+                NextResponse::Await => {
+                    return Err(Status::unavailable("Node has no block data available"));
+                }
+            };
+
+            tracing::debug!("Fetched block via chainsync: {} bytes", block_cbor.len());
+
+            // Validate that the returned block matches what we requested
+            // This protects against forks that may have occurred during the fetch
+            use pallas_traverse::MultiEraBlock;
+            let returned_block = MultiEraBlock::decode(&block_cbor)
+                .map_err(|e| Status::internal(format!("Failed to decode returned block: {}", e)))?;
+
+            let returned_slot = returned_block.slot();
+            let returned_hash = returned_block.hash();
+
+            if returned_slot != slot {
+                return Err(Status::not_found(format!(
+                    "Block validation failed: requested slot {} but got slot {}. Block may have been rolled back due to a fork.",
+                    slot, returned_slot
+                )));
             }
-            NextResponse::Await => {
-                return Err(Status::unavailable("Node has no block data available"));
+
+            if returned_hash.as_slice() != req.hash {
+                return Err(Status::not_found(format!(
+                    "Block validation failed: requested hash {} but got hash {}. Block may have been rolled back due to a fork.",
+                    hex::encode(&req.hash),
+                    hex::encode(returned_hash)
+                )));
             }
-        };
 
-        tracing::debug!("Fetched block via chainsync: {} bytes", block_cbor.len());
+            tracing::debug!("Block validation passed: slot={}, hash={}", slot, hex::encode(&req.hash));
 
-        // Validate that the returned block matches what we requested
-        // This protects against forks that may have occurred during the fetch
-        use pallas_traverse::MultiEraBlock;
-        let returned_block = MultiEraBlock::decode(&block_cbor)
-            .map_err(|e| Status::internal(format!("Failed to decode returned block: {}", e)))?;
+            Ok(Response::new(GetBlockByHashResponse {
+                block_cbor,
+                slot,
+                hash: req.hash,
+                timestamp,
+            }))
+        }.await;
 
-        let returned_slot = returned_block.slot();
-        let returned_hash = returned_block.hash();
+        // Explicitly shutdown the connection to prevent file descriptor leaks
+        // This must happen regardless of success or failure
+        sync.shutdown().await;
 
-        if returned_slot != slot {
-            return Err(Status::not_found(format!(
-                "Block validation failed: requested slot {} but got slot {}. Block may have been rolled back due to a fork.",
-                slot, returned_slot
-            )));
-        }
-
-        if returned_hash.as_slice() != req.hash {
-            return Err(Status::not_found(format!(
-                "Block validation failed: requested hash {} but got hash {}. Block may have been rolled back due to a fork.",
-                hex::encode(&req.hash),
-                hex::encode(returned_hash)
-            )));
-        }
-
-        tracing::debug!("Block validation passed: slot={}, hash={}", slot, hex::encode(&req.hash));
-
-        Ok(Response::new(GetBlockByHashResponse {
-            block_cbor,
-            slot,
-            hash: req.hash,
-            timestamp,
-        }))
+        result
     }
 }
 
