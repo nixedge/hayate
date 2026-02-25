@@ -60,7 +60,8 @@ async fn run_chain_sync(
     info!("✅ Connected to Cardano node");
 
     // Create block processor with storage handle
-    let mut processor = BlockProcessor::new(storage_handle.clone()).await?;
+    let system_start_ms = network.system_start_ms();
+    let mut processor = BlockProcessor::new(storage_handle.clone(), system_start_ms).await?;
 
     // Add wallet IDs to processor for per-wallet tip tracking
     for wallet_id in &wallet_ids {
@@ -241,7 +242,8 @@ async fn handle_rollback_command(
     });
 
     // Create block processor
-    let mut processor = BlockProcessor::new(handle.clone()).await?;
+    let system_start_ms = network.system_start_ms();
+    let mut processor = BlockProcessor::new(handle.clone(), system_start_ms).await?;
 
     // Perform rollback
     let count = processor.rollback_to(target_slot).await?;
