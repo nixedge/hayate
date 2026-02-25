@@ -7,10 +7,13 @@ use tempfile::TempDir;
 use cardano_lsm::Key;
 use pallas_crypto::hash::Hash;
 
-fn create_test_processor() -> (BlockProcessor, TempDir) {
+async fn create_test_processor() -> (BlockProcessor, TempDir) {
     let temp = TempDir::new().unwrap();
     let storage = NetworkStorage::open(temp.path().to_path_buf(), Network::Preprod).unwrap();
-    let processor = BlockProcessor::new(storage);
+    let (manager, handle) = hayate::indexer::StorageManager::new(storage);
+    tokio::spawn(async move { manager.run().await; });
+    let system_start_ms = Network::Preprod.system_start_ms();
+    let processor = BlockProcessor::new(handle, system_start_ms).await.unwrap();
     (processor, temp)
 }
 
@@ -18,7 +21,7 @@ fn create_test_processor() -> (BlockProcessor, TempDir) {
 
 #[tokio::test]
 async fn test_utxo_creation() {
-    let (mut processor, _temp) = create_test_processor();
+    let (mut processor, _temp) = create_test_processor().await;
     
     // Add an address to track
     let payment_key = Hash::<28>::new([1u8; 28]);
@@ -35,7 +38,7 @@ async fn test_utxo_creation() {
 
 #[tokio::test]
 async fn test_utxo_spending() {
-    let (mut processor, _temp) = create_test_processor();
+    let (mut processor, _temp) = create_test_processor().await;
     
     // 1. Create a UTxO
     let tx_hash = Hash::<32>::new([1u8; 32]);
@@ -58,7 +61,7 @@ async fn test_utxo_spending() {
 
 #[tokio::test]
 async fn test_balance_updates() {
-    let (mut processor, _temp) = create_test_processor();
+    let (mut processor, _temp) = create_test_processor().await;
     
     let address = vec![1, 2, 3, 4];
     let balance_key = Key::from(&address);
@@ -87,7 +90,7 @@ async fn test_balance_updates() {
 
 #[tokio::test]
 async fn test_delegation_tracking() {
-    let (mut processor, _temp) = create_test_processor();
+    let (mut processor, _temp) = create_test_processor().await;
     
     let stake_key = vec![1, 2, 3, 4];
     let pool_id = vec![5, 6, 7, 8];
@@ -110,7 +113,7 @@ async fn test_delegation_tracking() {
 
 #[tokio::test]
 async fn test_delegation_changes() {
-    let (mut processor, _temp) = create_test_processor();
+    let (mut processor, _temp) = create_test_processor().await;
     
     let stake_key = vec![1, 2, 3, 4];
     let pool1 = vec![5, 6, 7, 8];
@@ -135,7 +138,7 @@ async fn test_delegation_changes() {
 
 #[tokio::test]
 async fn test_withdrawal_recording() {
-    let (mut processor, _temp) = create_test_processor();
+    let (mut processor, _temp) = create_test_processor().await;
     
     let stake_key = vec![1, 2, 3, 4];
     let epoch = 100;
@@ -162,7 +165,7 @@ async fn test_withdrawal_recording() {
 
 #[tokio::test]
 async fn test_multiple_withdrawals() {
-    let (mut processor, _temp) = create_test_processor();
+    let (mut processor, _temp) = create_test_processor().await;
     
     let stake_key = vec![1, 2, 3, 4];
     let epoch = 100;
@@ -188,7 +191,7 @@ async fn test_multiple_withdrawals() {
 
 #[tokio::test]
 async fn test_reward_snapshots() {
-    let (mut processor, _temp) = create_test_processor();
+    let (mut processor, _temp) = create_test_processor().await;
     
     let stake_key = vec![1, 2, 3, 4];
     
@@ -224,7 +227,7 @@ async fn test_reward_snapshots() {
 
 #[tokio::test]
 async fn test_epoch_reward_calculation() {
-    let (mut processor, _temp) = create_test_processor();
+    let (mut processor, _temp) = create_test_processor().await;
     
     let stake_key = vec![1, 2, 3, 4];
     
@@ -245,7 +248,7 @@ async fn test_epoch_reward_calculation() {
 
 #[tokio::test]
 async fn test_reward_calculation_with_withdrawal() {
-    let (mut processor, _temp) = create_test_processor();
+    let (mut processor, _temp) = create_test_processor().await;
     
     let stake_key = vec![1, 2, 3, 4];
     
@@ -271,7 +274,7 @@ async fn test_reward_calculation_with_withdrawal() {
 
 #[tokio::test]
 async fn test_lifetime_rewards() {
-    let (mut processor, _temp) = create_test_processor();
+    let (mut processor, _temp) = create_test_processor().await;
     
     let stake_key = vec![1, 2, 3, 4];
     
@@ -300,7 +303,7 @@ async fn test_lifetime_rewards() {
 
 #[tokio::test]
 async fn test_nonce_storage() {
-    let (mut processor, _temp) = create_test_processor();
+    let (mut processor, _temp) = create_test_processor().await;
     
     let epoch = 100;
     let nonce = [0xab; 32];
@@ -315,7 +318,7 @@ async fn test_nonce_storage() {
 
 #[tokio::test]
 async fn test_nonce_per_epoch() {
-    let (mut processor, _temp) = create_test_processor();
+    let (mut processor, _temp) = create_test_processor().await;
     
     // Store nonces for multiple epochs
     for epoch in 100..110 {
@@ -350,7 +353,7 @@ fn test_epoch_calculation() {
 
 #[tokio::test]
 async fn test_epoch_boundary_detection() {
-    let (mut processor, _temp) = create_test_processor();
+    let (mut processor, _temp) = create_test_processor().await;
     
     // Simulate blocks across epoch boundary
     // Epoch 0: slots 0 - 431,999
@@ -403,7 +406,7 @@ fn test_wallet_filter_stake_keys() {
 
 #[tokio::test]
 async fn test_multiple_wallets() {
-    let (mut processor, _temp) = create_test_processor();
+    let (mut processor, _temp) = create_test_processor().await;
     
     // Add 3 wallets
     for i in 0..3 {
@@ -426,7 +429,7 @@ async fn test_multiple_wallets() {
 
 #[tokio::test]
 async fn test_governance_proposal_storage() {
-    let (mut processor, _temp) = create_test_processor();
+    let (mut processor, _temp) = create_test_processor().await;
     
     let tx_hash = Hash::<32>::new([1u8; 32]);
     let proposal_id = format!("{}#0", hex::encode(&tx_hash));
@@ -450,7 +453,7 @@ async fn test_governance_proposal_storage() {
 
 #[tokio::test]
 async fn test_governance_merkle_proof() {
-    let (mut processor, _temp) = create_test_processor();
+    let (mut processor, _temp) = create_test_processor().await;
     
     // Insert governance action into Merkle tree
     let action_id = b"gov_action_1";
@@ -467,7 +470,7 @@ async fn test_governance_merkle_proof() {
 
 #[tokio::test]
 async fn test_full_transaction_flow() {
-    let (mut processor, _temp) = create_test_processor();
+    let (mut processor, _temp) = create_test_processor().await;
     
     let payment_key = Hash::<28>::new([1u8; 28]);
     let stake_key = Hash::<28>::new([2u8; 28]);
@@ -548,7 +551,7 @@ async fn test_rewards_before_indexing_started() {
 
 #[tokio::test]
 async fn test_concurrent_delegations() {
-    let (mut processor, _temp) = create_test_processor();
+    let (mut processor, _temp) = create_test_processor().await;
     
     let stake_key = vec![1, 2, 3, 4];
     let pool1 = vec![0xaa; 28];
@@ -570,7 +573,7 @@ async fn test_concurrent_delegations() {
 
 #[tokio::test]
 async fn test_empty_withdrawal_epoch() {
-    let (processor, _temp) = create_test_processor();
+    let (processor, _temp) = create_test_processor().await;
 
     let stake_key = vec![1, 2, 3, 4];
     let epoch = 100;
@@ -587,7 +590,7 @@ async fn test_empty_withdrawal_epoch() {
 
 #[tokio::test]
 async fn test_bulk_utxo_operations() {
-    let (mut processor, _temp) = create_test_processor();
+    let (mut processor, _temp) = create_test_processor().await;
     
     // Create 1000 UTxOs
     for i in 0u32..1000 {
@@ -615,7 +618,7 @@ async fn test_bulk_utxo_operations() {
 
 #[tokio::test]
 async fn test_bulk_reward_snapshots() {
-    let (mut processor, _temp) = create_test_processor();
+    let (mut processor, _temp) = create_test_processor().await;
     
     let stake_key = vec![1, 2, 3, 4];
     

@@ -113,14 +113,17 @@ pub struct BlockProcessor {
     // Rollback buffer - keep last K blocks for potential rollback
     rollback_buffer: VecDeque<RollbackInfo>,
     rollback_buffer_size: usize,
+
+    // Network system start time (genesis time) in Unix milliseconds
+    system_start_ms: u64,
 }
 
 impl BlockProcessor {
-    pub async fn new(storage: StorageHandle) -> Result<Self> {
-        Self::new_with_rollback_buffer(storage, 100).await
+    pub async fn new(storage: StorageHandle, system_start_ms: u64) -> Result<Self> {
+        Self::new_with_rollback_buffer(storage, 100, system_start_ms).await
     }
 
-    pub async fn new_with_rollback_buffer(storage: StorageHandle, buffer_size: usize) -> Result<Self> {
+    pub async fn new_with_rollback_buffer(storage: StorageHandle, buffer_size: usize, system_start_ms: u64) -> Result<Self> {
         // Try to restore chain tip
         let current_slot = storage.get_chain_tip().await?
             .map(|tip| tip.slot)
@@ -136,6 +139,7 @@ impl BlockProcessor {
             tracked_tokens: Vec::new(),
             rollback_buffer: VecDeque::with_capacity(buffer_size),
             rollback_buffer_size: buffer_size,
+            system_start_ms,
         })
     }
 
@@ -175,10 +179,8 @@ impl BlockProcessor {
         };
 
         // Get block timestamp (Unix milliseconds)
-        // For all eras, estimate timestamp from slot
-        // TODO: Make genesis time configurable per network
-        let genesis_time_ms: u64 = 1591566291000; // Mainnet genesis (July 29, 2020)
-        let block_timestamp = genesis_time_ms + (slot * 1000);
+        // For all eras, calculate timestamp from slot using network's genesis time
+        let block_timestamp = self.system_start_ms + (slot * 1000);
 
         let mut rollback_info = RollbackInfo {
             slot,

@@ -47,7 +47,18 @@ impl Network {
             Network::Custom(_) => 0,
         }
     }
-    
+
+    /// Get the system start time (genesis time) in Unix milliseconds
+    pub fn system_start_ms(&self) -> u64 {
+        match self {
+            Network::Mainnet => 1591566291000,  // July 29, 2020 21:44:51 UTC
+            Network::Preprod => 1654041600000,  // June 1, 2022 00:00:00 UTC
+            Network::Preview => 1666656000000,  // October 25, 2022 00:00:00 UTC
+            Network::SanchoNet => 1686790200000, // June 15, 2023 00:30:00 UTC
+            Network::Custom(_) => 1591566291000, // Default to mainnet genesis
+        }
+    }
+
     pub fn as_str(&self) -> &str {
         match self {
             Network::Mainnet => "mainnet",
@@ -57,7 +68,7 @@ impl Network {
             Network::Custom(name) => name,
         }
     }
-    
+
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "mainnet" => Some(Network::Mainnet),

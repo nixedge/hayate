@@ -95,6 +95,10 @@ pub struct NetworkConfig {
     /// Network magic number
     pub magic: u64,
 
+    /// System start time (Unix timestamp in milliseconds)
+    /// This is the network's genesis time used for slot-to-timestamp conversion
+    pub system_start_ms: u64,
+
     /// Optional: Path to genesis file for custom networks
     pub genesis_file: Option<PathBuf>,
 
@@ -114,41 +118,45 @@ impl Default for HayateConfig {
     fn default() -> Self {
         let mut networks = HashMap::new();
         
-        // Mainnet
+        // Mainnet - Shelley mainnet launch (July 29, 2020 21:44:51 UTC)
         networks.insert("mainnet".to_string(), NetworkConfig {
             enabled: false,
             relay: "relays-new.cardano-mainnet.iohk.io:3001".to_string(),
             magic: 764824073,
+            system_start_ms: 1591566291000,
             genesis_file: None,
             start_point: None,
             socket_path: None,
         });
 
-        // Preprod
+        // Preprod - (June 1, 2022 00:00:00 UTC)
         networks.insert("preprod".to_string(), NetworkConfig {
             enabled: true,
             relay: "preprod-node.world.dev.cardano.org:30000".to_string(),
             magic: 1,
+            system_start_ms: 1654041600000,
             genesis_file: None,
             start_point: None,
             socket_path: None,
         });
 
-        // Preview
+        // Preview - (June 1, 2022 00:00:00 UTC)
         networks.insert("preview".to_string(), NetworkConfig {
             enabled: false,
             relay: "preview-node.world.dev.cardano.org:30002".to_string(),
             magic: 2,
+            system_start_ms: 1666656000000,
             genesis_file: None,
             start_point: None,
             socket_path: None,
         });
 
-        // SanchoNet - for Mike! 🎉
+        // SanchoNet - (June 15, 2023 00:30:00 UTC)
         networks.insert("sanchonet".to_string(), NetworkConfig {
             enabled: false,
             relay: "sanchonet-node.world.dev.cardano.org:30004".to_string(),
             magic: 4,
+            system_start_ms: 1686790200000,
             genesis_file: None,
             start_point: None,
             socket_path: None,
@@ -193,12 +201,14 @@ impl HayateConfig {
         name: String,
         relay: String,
         magic: u64,
+        system_start_ms: u64,
         genesis_file: Option<PathBuf>,
     ) {
         self.networks.insert(name.clone(), NetworkConfig {
             enabled: true,
             relay,
             magic,
+            system_start_ms,
             genesis_file,
             start_point: None,
             socket_path: None,
@@ -229,6 +239,7 @@ mod tests {
             "my-testnet".to_string(),
             "localhost:3001".to_string(),
             42,
+            1654041600000, // system_start_ms
             Some(PathBuf::from("./genesis.json")),
         );
 
