@@ -2,6 +2,7 @@
 
 use super::StorageHandle;
 use crate::config::TokenConfig;
+use crate::snapshot_manager;
 use anyhow::{Context, Result};
 use pallas_crypto::hash::Hash;
 use pallas_traverse::{MultiEraBlock, MultiEraTx, MultiEraOutput};
@@ -116,6 +117,10 @@ pub struct BlockProcessor {
 
     // Network system start time (genesis time) in Unix milliseconds
     system_start_ms: u64,
+
+    // Snapshot management
+    snapshot_manager: snapshot_manager::SnapshotManager,
+    chain_tip_slot: u64,  // Estimated chain tip for near-tip detection
 }
 
 impl BlockProcessor {
@@ -140,6 +145,8 @@ impl BlockProcessor {
             rollback_buffer: VecDeque::with_capacity(buffer_size),
             rollback_buffer_size: buffer_size,
             system_start_ms,
+            snapshot_manager: snapshot_manager::SnapshotManager::default(),
+            chain_tip_slot: current_slot, // Start with current slot as estimate
         })
     }
 
@@ -159,7 +166,7 @@ impl BlockProcessor {
     }
 
     /// Process a block from CBOR bytes
-    pub async fn process_block(&mut self, block_bytes: &[u8], slot: u64, block_hash: &[u8]) -> Result<BlockStats> {
+    pub async fn process_block(&mut self, block_bytes: &[u8], slot: u64, block_hash: &[u8], chain_tip_slot: Option<u64>) -> Result<BlockStats> {
         // Check if this is a forward move
         if slot < self.current_slot {
             anyhow::bail!("Slot {} is before current slot {}. Use rollback_to() first.", slot, self.current_slot);
@@ -248,6 +255,14 @@ impl BlockProcessor {
         self.current_slot = slot;
         self.blocks_processed += 1;
 
+        // Update chain tip estimate
+        // If tip provided by node, use it; otherwise assume current slot is tip
+        if let Some(tip_slot) = chain_tip_slot {
+            self.chain_tip_slot = tip_slot;
+        } else if slot > self.chain_tip_slot {
+            self.chain_tip_slot = slot;
+        }
+
         // Add to rollback buffer
         self.rollback_buffer.push_back(rollback_info);
         if self.rollback_buffer.len() > self.rollback_buffer_size {
@@ -258,6 +273,20 @@ impl BlockProcessor {
         // Tips are also updated on rollbacks and shutdown
         if epoch_boundary {
             self.save_current_tips().await?;
+        }
+
+        // Check if we should create a snapshot
+        // Strategy: epoch-based during bulk sync, time-based (5min) near tip
+        let blocks_behind = self.chain_tip_slot.saturating_sub(slot);
+        if self.snapshot_manager.should_snapshot(slot, epoch, self.chain_tip_slot) {
+            tracing::info!("📸 Creating snapshot at slot {}, epoch {} ({} blocks behind tip)", slot, epoch, blocks_behind);
+            if let Err(e) = self.storage.save_snapshots(slot).await {
+                tracing::error!("Failed to save snapshots at slot {}: {}", slot, e);
+                // Continue processing - next snapshot opportunity will retry
+            } else {
+                self.snapshot_manager.record_snapshot(slot, epoch);
+                tracing::info!("✓ Saved snapshots at slot {}, epoch {}", slot, epoch);
+            }
         }
 
         if self.blocks_processed % 1000 == 0 {
@@ -715,6 +744,20 @@ impl BlockProcessor {
                 }
             }
         }
+
+        Ok(())
+    }
+
+    /// Create a final snapshot before shutdown
+    ///
+    /// This ensures minimal data loss by snapshotting the current state
+    /// before the process exits gracefully.
+    pub async fn create_final_snapshot(&mut self) -> Result<()> {
+        let slot = self.current_slot;
+
+        tracing::info!("Creating final snapshot at slot {}", slot);
+
+        self.storage.save_snapshots(slot).await?;
 
         Ok(())
     }

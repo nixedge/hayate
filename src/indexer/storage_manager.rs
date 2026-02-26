@@ -204,6 +204,12 @@ pub enum StorageCommand {
     ReturnStorage {
         storage: NetworkStorage,
     },
+
+    /// Save snapshots of all LSM trees
+    SaveSnapshots {
+        slot: u64,
+        response: oneshot::Sender<Result<()>>,
+    },
 }
 
 /// Handle to communicate with the storage manager
@@ -431,6 +437,13 @@ impl StorageHandle {
     pub async fn store_block_metadata(&self, block_hash: Vec<u8>, slot: u64, timestamp: u64, prev_hash: Option<Vec<u8>>) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.sender.send(StorageCommand::StoreBlockMetadata { block_hash, slot, timestamp, prev_hash, response: tx })?;
+        rx.await?
+    }
+
+    /// Save snapshots of all LSM trees
+    pub async fn save_snapshots(&self, slot: u64) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.sender.send(StorageCommand::SaveSnapshots { slot, response: tx })?;
         rx.await?
     }
 }
@@ -749,6 +762,15 @@ impl StorageManager {
 
             StorageCommand::ReturnStorage { storage } => {
                 self.storage = Some(storage);
+            }
+
+            StorageCommand::SaveSnapshots { slot, response } => {
+                let result = if let Some(ref mut storage) = self.storage {
+                    storage.save_all_snapshots(slot)
+                } else {
+                    Err(anyhow::anyhow!("Storage not available"))
+                };
+                let _ = response.send(result);
             }
         }
     }

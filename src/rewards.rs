@@ -246,6 +246,21 @@ impl RewardsTracker {
         
         Ok(latest.map(|(_, pool_id)| pool_id))
     }
+
+    /// Save snapshots of all rewards tracker trees
+    ///
+    /// This creates consistent snapshots for all 3 trees (snapshots, withdrawals, delegations)
+    pub fn save_snapshot(&mut self, slot: u64) -> Result<()> {
+        let snapshot_name = format!("slot-{:020}", slot);
+        let label = format!("Slot {}", slot);
+
+        self.snapshots.save_snapshot(&snapshot_name, &label)?;
+        self.withdrawals.save_snapshot(&snapshot_name, &label)?;
+        self.delegations.save_snapshot(&snapshot_name, &label)?;
+
+        tracing::debug!("Saved rewards tracker snapshots at slot {}", slot);
+        Ok(())
+    }
 }
 
 #[cfg(test)]

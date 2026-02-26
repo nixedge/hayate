@@ -466,6 +466,39 @@ impl NetworkStorage {
 
         Ok(tx_hashes)
     }
+
+    /// Save snapshots of all LSM trees
+    ///
+    /// This creates a consistent snapshot across all storage trees at the given slot.
+    /// All snapshots use the same name (based on slot) for easy restoration.
+    pub fn save_all_snapshots(&mut self, slot: u64) -> Result<()> {
+        let snapshot_name = format!("slot-{:020}", slot);
+        let label = format!("Slot {}", slot);
+
+        tracing::debug!("Saving snapshots for all trees at slot {} ({})", slot, snapshot_name);
+
+        // Save all regular LSM trees
+        self.utxo_tree.save_snapshot(&snapshot_name, &label)?;
+        // TODO: balance_tree is MonoidalLsmTree which doesn't expose save_snapshot yet
+        // It's derived from utxo_tree so can be reconstructed on restore
+        // self.balance_tree.save_snapshot(&snapshot_name, &label)?;
+        self.governance_tree.save_snapshot(&snapshot_name, &label)?;
+        self.nonce_tree.save_snapshot(&snapshot_name, &label)?;
+        self.chain_tip_tree.save_snapshot(&snapshot_name, &label)?;
+        self.address_utxo_index.save_snapshot(&snapshot_name, &label)?;
+        self.address_tx_index.save_snapshot(&snapshot_name, &label)?;
+        self.policy_tx_index.save_snapshot(&snapshot_name, &label)?;
+        self.asset_tx_index.save_snapshot(&snapshot_name, &label)?;
+        self.spent_utxo_index.save_snapshot(&snapshot_name, &label)?;
+        self.block_events_tree.save_snapshot(&snapshot_name, &label)?;
+        self.block_hash_index.save_snapshot(&snapshot_name, &label)?;
+
+        // Save rewards tracker snapshots (3 more trees)
+        self.rewards_tracker.save_snapshot(slot)?;
+
+        tracing::info!("Saved snapshots for all trees at slot {}", slot);
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
