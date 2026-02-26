@@ -7,6 +7,7 @@ mod gpg;
 mod chain_sync;
 mod keys;
 mod rewards;
+mod snapshot_manager;
 mod indexer;
 mod api;
 mod config;
@@ -80,12 +81,32 @@ async fn run_chain_sync(
     info!("🔄 Starting block processing...");
 
     // Process blocks - loop until shutdown signal
-    let mut shutdown = Box::pin(tokio::signal::ctrl_c());
+    // Handle both SIGINT (Ctrl+C) and SIGTERM (systemd/docker stop)
+    let mut shutdown = Box::pin(async {
+        let ctrl_c = tokio::signal::ctrl_c();
+
+        #[cfg(unix)]
+        {
+            let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("Failed to setup SIGTERM handler");
+            tokio::select! {
+                _ = ctrl_c => info!("🛑 Received SIGINT (Ctrl+C)"),
+                _ = sigterm.recv() => info!("🛑 Received SIGTERM"),
+            }
+        }
+
+        #[cfg(not(unix))]
+        {
+            ctrl_c.await.expect("Failed to listen for Ctrl+C");
+            info!("🛑 Received shutdown signal (Ctrl+C)");
+        }
+    });
+
     let mut is_caught_up = false;
     let result: anyhow::Result<()> = loop {
         tokio::select! {
             _ = &mut shutdown => {
-                info!("🛑 Received shutdown signal, saving tips...");
+                info!("Shutting down gracefully...");
                 break Ok(());
             }
             next_result = async {
@@ -100,11 +121,17 @@ async fn run_chain_sync(
 
         // Process the response
         match next {
-            NextResponse::RollForward(block_bytes, _tip) => {
+            NextResponse::RollForward(block_bytes, tip) => {
                 // Parse block to get slot and hash
                 let block = MultiEraBlock::decode(&block_bytes)?;
                 let slot = block.slot();
                 let hash = block.hash();
+
+                // Extract chain tip slot for snapshot logic
+                let chain_tip_slot = match tip.0 {
+                    Point::Specific(tip_slot, _) => Some(tip_slot),
+                    Point::Origin => None,
+                };
 
                 // Log new blocks only when we were previously caught up (waiting at tip)
                 // This means we only log blocks that extend the chain after we've been idle
@@ -115,7 +142,7 @@ async fn run_chain_sync(
                 is_caught_up = false;
 
                 // Process block
-                match processor.process_block(&block_bytes, slot, hash.as_ref()).await {
+                match processor.process_block(&block_bytes, slot, hash.as_ref(), chain_tip_slot).await {
                     Ok(_stats) => {
                         // Broadcast block update
                         indexer.broadcast_block(indexer::BlockUpdate {
@@ -169,6 +196,16 @@ async fn run_chain_sync(
     // Save tips before exiting (whether shutdown, error, or normal exit)
     info!("💾 Saving final chain tips...");
     processor.save_current_tips().await?;
+
+    // Create final snapshot before exit for minimal data loss
+    info!("📸 Creating final snapshot before shutdown...");
+    let current_slot = processor.current_slot;
+    if let Err(e) = processor.create_final_snapshot().await {
+        tracing::error!("Failed to create final snapshot: {}", e);
+        // Continue with shutdown even if snapshot fails
+    } else {
+        info!("✓ Final snapshot saved at slot {}", current_slot);
+    }
 
     result
 }

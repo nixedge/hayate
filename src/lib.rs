@@ -8,6 +8,7 @@ pub mod chain_sync;
 pub mod keys;
 pub mod rewards;  // Must come before indexer
 pub mod rewards_calculation;  // Rewards calculation logic
+pub mod snapshot_manager;  // LSM snapshot management
 pub mod indexer;
 pub mod api;
 pub mod config;

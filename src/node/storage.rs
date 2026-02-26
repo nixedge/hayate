@@ -328,6 +328,29 @@ impl NodeStorage {
             Ok(None)
         }
     }
+
+    /// Save snapshots of all LSM trees
+    ///
+    /// This creates a consistent snapshot across all node storage trees at the given slot.
+    pub fn save_all_snapshots(&mut self, slot: u64) -> Result<()> {
+        let snapshot_name = format!("slot-{:020}", slot);
+        let label = format!("Slot {}", slot);
+
+        tracing::debug!("Saving node storage snapshots at slot {} ({})", slot, snapshot_name);
+
+        // Save all 8 LSM trees
+        self.utxo_tree.save_snapshot(&snapshot_name, &label)?;
+        self.stake_tree.save_snapshot(&snapshot_name, &label)?;
+        self.pool_tree.save_snapshot(&snapshot_name, &label)?;
+        self.nonce_tree.save_snapshot(&snapshot_name, &label)?;
+        self.protocol_tree.save_snapshot(&snapshot_name, &label)?;
+        self.chain_tip_tree.save_snapshot(&snapshot_name, &label)?;
+        self.delegation_tree.save_snapshot(&snapshot_name, &label)?;
+        self.pool_registration_tree.save_snapshot(&snapshot_name, &label)?;
+
+        tracing::info!("Saved node storage snapshots at slot {}", slot);
+        Ok(())
+    }
 }
 
 // Helper functions for epoch calculations
