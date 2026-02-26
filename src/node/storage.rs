@@ -9,6 +9,28 @@ use std::collections::HashMap;
 
 use crate::indexer::Network;
 
+/// Helper to find the latest snapshot for an LSM tree
+fn get_latest_snapshot(tree_path: &std::path::Path) -> Result<Option<String>> {
+    let temp_tree = LsmTree::open(tree_path, LsmConfig::default())?;
+    let snapshots = temp_tree.list_snapshots()?;
+
+    if snapshots.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(snapshots.into_iter().max())
+}
+
+/// Open an LSM tree, restoring from latest snapshot if available
+fn open_lsm_tree_with_snapshot(tree_path: std::path::PathBuf) -> Result<LsmTree> {
+    if let Some(snapshot_name) = get_latest_snapshot(&tree_path)? {
+        tracing::info!("Restoring {:?} from snapshot: {}", tree_path.file_name().unwrap_or_default(), snapshot_name);
+        Ok(LsmTree::open_snapshot(tree_path, &snapshot_name)?)
+    } else {
+        Ok(LsmTree::open(tree_path, LsmConfig::default())?)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UtxoEntry {
     pub address: Vec<u8>,
@@ -89,14 +111,14 @@ impl NodeStorage {
 
         std::fs::create_dir_all(&network_path)?;
 
-        let utxo_tree = LsmTree::open(network_path.join("utxos"), LsmConfig::default())?;
-        let stake_tree = LsmTree::open(network_path.join("stakes"), LsmConfig::default())?;
-        let pool_tree = LsmTree::open(network_path.join("pools"), LsmConfig::default())?;
-        let nonce_tree = LsmTree::open(network_path.join("nonces"), LsmConfig::default())?;
-        let protocol_tree = LsmTree::open(network_path.join("protocol"), LsmConfig::default())?;
-        let chain_tip_tree = LsmTree::open(network_path.join("chain_tip"), LsmConfig::default())?;
-        let delegation_tree = LsmTree::open(network_path.join("delegations"), LsmConfig::default())?;
-        let pool_registration_tree = LsmTree::open(network_path.join("pool_registrations"), LsmConfig::default())?;
+        let utxo_tree = open_lsm_tree_with_snapshot(network_path.join("utxos"))?;
+        let stake_tree = open_lsm_tree_with_snapshot(network_path.join("stakes"))?;
+        let pool_tree = open_lsm_tree_with_snapshot(network_path.join("pools"))?;
+        let nonce_tree = open_lsm_tree_with_snapshot(network_path.join("nonces"))?;
+        let protocol_tree = open_lsm_tree_with_snapshot(network_path.join("protocol"))?;
+        let chain_tip_tree = open_lsm_tree_with_snapshot(network_path.join("chain_tip"))?;
+        let delegation_tree = open_lsm_tree_with_snapshot(network_path.join("delegations"))?;
+        let pool_registration_tree = open_lsm_tree_with_snapshot(network_path.join("pool_registrations"))?;
 
         Ok(Self {
             network,

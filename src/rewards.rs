@@ -11,6 +11,28 @@ use std::path::Path;
 use serde::{Serialize, Deserialize};
 use anyhow::Result;
 
+/// Helper to find the latest snapshot for an LSM tree
+fn get_latest_snapshot(tree_path: &std::path::Path) -> Result<Option<String>> {
+    let temp_tree = LsmTree::open(tree_path, LsmConfig::default())?;
+    let snapshots = temp_tree.list_snapshots()?;
+
+    if snapshots.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(snapshots.into_iter().max())
+}
+
+/// Open an LSM tree, restoring from latest snapshot if available
+fn open_lsm_tree_with_snapshot(tree_path: std::path::PathBuf) -> Result<LsmTree> {
+    if let Some(snapshot_name) = get_latest_snapshot(&tree_path)? {
+        tracing::info!("Restoring {:?} from snapshot: {}", tree_path.file_name().unwrap_or_default(), snapshot_name);
+        Ok(LsmTree::open_snapshot(tree_path, &snapshot_name)?)
+    } else {
+        Ok(LsmTree::open(tree_path, LsmConfig::default())?)
+    }
+}
+
 /// Stake credential (stake key hash)
 pub type StakeCredential = Vec<u8>;
 
@@ -48,11 +70,11 @@ pub struct RewardsTracker {
 impl RewardsTracker {
     pub fn open(path: impl AsRef<Path>, start_epoch: u64) -> Result<Self> {
         let path = path.as_ref();
-        
+
         Ok(Self {
-            snapshots: LsmTree::open(path.join("reward_snapshots"), LsmConfig::default())?,
-            withdrawals: LsmTree::open(path.join("withdrawals"), LsmConfig::default())?,
-            delegations: LsmTree::open(path.join("delegations"), LsmConfig::default())?,
+            snapshots: open_lsm_tree_with_snapshot(path.join("reward_snapshots"))?,
+            withdrawals: open_lsm_tree_with_snapshot(path.join("withdrawals"))?,
+            delegations: open_lsm_tree_with_snapshot(path.join("delegations"))?,
             indexing_start_epoch: start_epoch,
         })
     }
