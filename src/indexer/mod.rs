@@ -129,25 +129,48 @@ pub struct NetworkStorage {
     pub indexing_start_epoch: u64,
 }
 
+/// Helper to find the latest snapshot for an LSM tree
+fn get_latest_snapshot(tree_path: &std::path::Path) -> Result<Option<String>> {
+    let temp_tree = LsmTree::open(tree_path, LsmConfig::default())?;
+    let snapshots = temp_tree.list_snapshots()?;
+
+    if snapshots.is_empty() {
+        return Ok(None);
+    }
+
+    // Snapshots are named "slot-{:020}" so lexicographic sort gives us chronological order
+    Ok(snapshots.into_iter().max())
+}
+
+/// Open an LSM tree, restoring from latest snapshot if available
+fn open_lsm_tree_with_snapshot(tree_path: std::path::PathBuf) -> Result<LsmTree> {
+    if let Some(snapshot_name) = get_latest_snapshot(&tree_path)? {
+        tracing::info!("Restoring {:?} from snapshot: {}", tree_path.file_name().unwrap_or_default(), snapshot_name);
+        Ok(LsmTree::open_snapshot(tree_path, &snapshot_name)?)
+    } else {
+        Ok(LsmTree::open(tree_path, LsmConfig::default())?)
+    }
+}
+
 impl NetworkStorage {
     pub fn open(base_path: PathBuf, network: Network) -> Result<Self> {
         let network_path = base_path.join(network.as_str());
 
         tracing::info!("Opening storage for {} at {:?}", network.as_str(), network_path);
 
-        let utxo_tree = LsmTree::open(network_path.join("utxos"), LsmConfig::default())?;
+        let utxo_tree = open_lsm_tree_with_snapshot(network_path.join("utxos"))?;
         let balance_tree = MonoidalLsmTree::open(network_path.join("balances"), LsmConfig::default())?;
-        let governance_tree = LsmTree::open(network_path.join("governance"), LsmConfig::default())?;
+        let governance_tree = open_lsm_tree_with_snapshot(network_path.join("governance"))?;
         let governance_merkle = IncrementalMerkleTree::new(32);
-        let nonce_tree = LsmTree::open(network_path.join("nonces"), LsmConfig::default())?;
-        let chain_tip_tree = LsmTree::open(network_path.join("chain_tip"), LsmConfig::default())?;
-        let address_utxo_index = LsmTree::open(network_path.join("address_utxos"), LsmConfig::default())?;
-        let address_tx_index = LsmTree::open(network_path.join("address_txs"), LsmConfig::default())?;
-        let policy_tx_index = LsmTree::open(network_path.join("policy_txs"), LsmConfig::default())?;
-        let asset_tx_index = LsmTree::open(network_path.join("asset_txs"), LsmConfig::default())?;
-        let spent_utxo_index = LsmTree::open(network_path.join("spent_utxos"), LsmConfig::default())?;
-        let block_events_tree = LsmTree::open(network_path.join("block_events"), LsmConfig::default())?;
-        let block_hash_index = LsmTree::open(network_path.join("block_hash_index"), LsmConfig::default())?;
+        let nonce_tree = open_lsm_tree_with_snapshot(network_path.join("nonces"))?;
+        let chain_tip_tree = open_lsm_tree_with_snapshot(network_path.join("chain_tip"))?;
+        let address_utxo_index = open_lsm_tree_with_snapshot(network_path.join("address_utxos"))?;
+        let address_tx_index = open_lsm_tree_with_snapshot(network_path.join("address_txs"))?;
+        let policy_tx_index = open_lsm_tree_with_snapshot(network_path.join("policy_txs"))?;
+        let asset_tx_index = open_lsm_tree_with_snapshot(network_path.join("asset_txs"))?;
+        let spent_utxo_index = open_lsm_tree_with_snapshot(network_path.join("spent_utxos"))?;
+        let block_events_tree = open_lsm_tree_with_snapshot(network_path.join("block_events"))?;
+        let block_hash_index = open_lsm_tree_with_snapshot(network_path.join("block_hash_index"))?;
 
         let start_epoch = 0;
         let rewards_tracker = RewardsTracker::open(network_path.join("rewards"), start_epoch)?;
