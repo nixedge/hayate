@@ -8,7 +8,7 @@
 // - Reduced overhead during initial sync (10 min = max replay time)
 // - Better recovery characteristics when live at tip (5 min)
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 use anyhow::Result;
 
@@ -30,6 +30,7 @@ pub struct SnapshotManager {
     tip_threshold: u64,
 
     /// Maximum number of snapshots to keep
+    #[allow(dead_code)]
     max_snapshots: usize,
 }
 
@@ -95,6 +96,7 @@ impl SnapshotManager {
     /// - Sortable lexicographically
     /// - Parseable (extract slot number)
     /// - Deterministic
+    #[allow(dead_code)]
     pub fn snapshot_name(slot: u64) -> String {
         format!("slot-{:020}", slot)
     }
@@ -102,6 +104,7 @@ impl SnapshotManager {
     /// Parse slot number from snapshot name
     ///
     /// Returns None if name doesn't match expected format
+    #[allow(dead_code)]
     pub fn parse_snapshot_slot(name: &str) -> Option<u64> {
         name.strip_prefix("slot-")
             .and_then(|s| s.parse::<u64>().ok())
@@ -110,6 +113,7 @@ impl SnapshotManager {
     /// Find the latest snapshot in a tree directory
     ///
     /// Returns the snapshot name, or None if no snapshots exist
+    #[allow(dead_code)]
     pub fn find_latest_snapshot(tree_path: &Path) -> Result<Option<String>> {
         let snapshots_dir = tree_path.join("snapshots");
 
@@ -145,6 +149,7 @@ impl SnapshotManager {
     /// # Arguments
     /// * `tree_path` - Path to the LSM tree directory
     /// * `keep_latest` - Number of snapshots to keep (default: uses max_snapshots)
+    #[allow(dead_code)]
     pub fn cleanup_old_snapshots(&self, tree_path: &Path, keep_latest: Option<usize>) -> Result<()> {
         let keep = keep_latest.unwrap_or(self.max_snapshots);
         let snapshots_dir = tree_path.join("snapshots");
@@ -198,6 +203,7 @@ impl SnapshotManager {
     ///
     /// # Returns
     /// The slot number of the restored snapshot
+    #[allow(dead_code)]
     pub fn restore_snapshot(tree_path: &Path, snapshot_name: &str) -> Result<u64> {
         let snapshot_dir = tree_path.join("snapshots").join(snapshot_name);
         let active_dir = tree_path.join("active");
