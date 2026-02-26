@@ -1,12 +1,12 @@
 // Snapshot management for cardano-lsm storage
 //
 // Implements adaptive snapshot strategy:
-// - During bulk sync (>100 blocks behind): Snapshot once per epoch
+// - During bulk sync (>100 blocks behind): Snapshot every 10 minutes
 // - Near tip (≤100 blocks behind): Snapshot every 5 minutes
 //
 // This optimizes for:
-// - Minimal overhead during CPU-bound initial sync
-// - Better recovery characteristics when network-bound near tip
+// - Reduced overhead during initial sync (10 min = max replay time)
+// - Better recovery characteristics when live at tip (5 min)
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -20,11 +20,11 @@ pub struct SnapshotManager {
     /// Slot of last snapshot
     last_snapshot_slot: u64,
 
-    /// Epoch of last snapshot
-    last_snapshot_epoch: u64,
+    /// Time interval when near tip (5 minutes)
+    tip_interval: Duration,
 
-    /// Minimum time between snapshots when near tip (5 minutes)
-    time_interval: Duration,
+    /// Time interval during bulk sync (10 minutes)
+    bulk_interval: Duration,
 
     /// Distance from tip to switch strategies (100 blocks)
     tip_threshold: u64,
@@ -37,53 +37,53 @@ impl SnapshotManager {
     /// Create a new snapshot manager
     ///
     /// # Arguments
-    /// * `tip_threshold` - Blocks behind tip to trigger time-based snapshots (default: 100)
-    /// * `time_interval_secs` - Seconds between snapshots when near tip (default: 300 = 5 minutes)
+    /// * `tip_threshold` - Blocks behind tip to switch from bulk to tip mode (default: 100)
+    /// * `tip_interval_secs` - Seconds between snapshots when near tip (default: 300 = 5 minutes)
+    /// * `bulk_interval_secs` - Seconds between snapshots during bulk sync (default: 600 = 10 minutes)
     /// * `max_snapshots` - Maximum snapshots to keep (default: 10)
-    pub fn new(tip_threshold: u64, time_interval_secs: u64, max_snapshots: usize) -> Self {
+    pub fn new(tip_threshold: u64, tip_interval_secs: u64, bulk_interval_secs: u64, max_snapshots: usize) -> Self {
         Self {
             last_snapshot_time: Instant::now(),
             last_snapshot_slot: 0,
-            last_snapshot_epoch: 0,
-            time_interval: Duration::from_secs(time_interval_secs),
+            tip_interval: Duration::from_secs(tip_interval_secs),
+            bulk_interval: Duration::from_secs(bulk_interval_secs),
             tip_threshold,
             max_snapshots,
         }
     }
 
-    /// Create with default settings (100 blocks, 5 minutes, keep 10)
+    /// Create with default settings (100 blocks, 5 min at tip, 10 min bulk, keep 10)
     pub fn default() -> Self {
-        Self::new(100, 300, 10)
+        Self::new(100, 300, 600, 10)
     }
 
     /// Determine if a snapshot should be taken
     ///
-    /// Returns true if:
-    /// - Near tip (≤100 blocks behind) AND 5 minutes elapsed, OR
-    /// - Bulk sync (>100 blocks behind) AND new epoch
+    /// Returns true if enough time has elapsed:
+    /// - Near tip (≤100 blocks behind): 5 minutes
+    /// - Bulk sync (>100 blocks behind): 10 minutes
     pub fn should_snapshot(
         &self,
         current_slot: u64,
-        current_epoch: u64,
+        _current_epoch: u64,
         chain_tip_slot: u64,
     ) -> bool {
         // Check if we're near the tip
         let blocks_behind = chain_tip_slot.saturating_sub(current_slot);
 
-        if blocks_behind <= self.tip_threshold {
-            // Near tip: Time-based (every 5 minutes)
-            self.last_snapshot_time.elapsed() >= self.time_interval
+        let required_interval = if blocks_behind <= self.tip_threshold {
+            self.tip_interval
         } else {
-            // Bulk sync: Epoch-based (once per epoch)
-            current_epoch > self.last_snapshot_epoch
-        }
+            self.bulk_interval
+        };
+
+        self.last_snapshot_time.elapsed() >= required_interval
     }
 
     /// Record that a snapshot was taken
-    pub fn record_snapshot(&mut self, slot: u64, epoch: u64) {
+    pub fn record_snapshot(&mut self, slot: u64, _epoch: u64) {
         self.last_snapshot_time = Instant::now();
         self.last_snapshot_slot = slot;
-        self.last_snapshot_epoch = epoch;
     }
 
     /// Get the snapshot name for a given slot
