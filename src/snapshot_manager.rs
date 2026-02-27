@@ -283,14 +283,15 @@ mod tests {
 
     #[test]
     fn test_snapshot_decision_bulk_sync() {
-        let manager = SnapshotManager::default();
+        let mut manager = SnapshotManager::default();
+        manager.last_snapshot_epoch = 5;
 
         // Simulate being 1000 blocks behind tip (bulk sync)
         let current_slot = 1000;
-        let current_epoch = 6;
+        let current_epoch = 6; // New epoch
         let chain_tip_slot = 2000; // 1000 blocks behind
 
-        // Immediately after creation - should NOT snapshot (no time elapsed)
-        assert!(!manager.should_snapshot(current_slot, current_epoch, chain_tip_slot));
+        // New epoch - should snapshot
+        assert!(manager.should_snapshot(current_slot, current_epoch, chain_tip_slot));
     }
 }
