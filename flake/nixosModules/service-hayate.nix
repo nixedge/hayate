@@ -81,6 +81,7 @@
         users.users.${cfg.user} = {
           isSystemUser = true;
           group = cfg.group;
+          extraGroups = ["cardano-node"];
         };
 
         users.groups.${cfg.group} = {};
