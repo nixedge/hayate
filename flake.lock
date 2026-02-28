@@ -10,11 +10,11 @@
         "treefmt-nix": "treefmt-nix"
       },
       "locked": {
-        "lastModified": 1772140715,
-        "narHash": "sha256-Gji0ni9+NSO9KCQyWQ3SNaWw933O8Myzpy6jt73vRvo=",
+        "lastModified": 1772247759,
+        "narHash": "sha256-rjbJ7vguCB4gJe34NddfaZ2mua9QOexf8LyaiEpnhOg=",
         "owner": "disassembler",
         "repo": "cardano-lsm-rust",
-        "rev": "796d2d985df59993803097aff406fb0baaa953ef",
+        "rev": "ff107bf2e754abc7a4dad1eb75f3567a816c6f2a",
         "type": "github"
       },
       "original": {
