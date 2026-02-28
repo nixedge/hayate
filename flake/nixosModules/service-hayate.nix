@@ -140,9 +140,7 @@
                 --config /etc/hayate/config.toml \
                 --network ${cfg.network} \
                 --socket ${cfg.socketPath} \
-                --db-path /var/lib/hayate \
-                --host ${cfg.hostAddr} \
-                --port ${toString cfg.port}
+                --db-path /var/lib/hayate
             '';
 
             # Resource limits
