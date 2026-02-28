@@ -26,6 +26,7 @@
         ../build.rs
         ../src
         ../proto
+        ../benches
       ];
     };
 
