@@ -150,7 +150,7 @@
             # Hardening
             NoNewPrivileges = true;
             PrivateTmp = true;
-            ProtectSystem = "strict";
+            ProtectSystem = "full";
             ProtectHome = true;
             ReadWritePaths = ["/var/lib/hayate"];
           };
