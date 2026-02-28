@@ -152,6 +152,7 @@
             ProtectSystem = "strict";
             ProtectHome = true;
             ReadWritePaths = ["/var/lib/hayate"];
+            BindReadOnlyPaths = ["/run/cardano-node"];
           };
         };
 
