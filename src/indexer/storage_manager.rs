@@ -210,6 +210,11 @@ pub enum StorageCommand {
         slot: u64,
         response: oneshot::Sender<Result<()>>,
     },
+
+    /// Shutdown the storage manager
+    Shutdown {
+        response: oneshot::Sender<()>,
+    },
 }
 
 /// Handle to communicate with the storage manager
@@ -446,6 +451,13 @@ impl StorageHandle {
         self.sender.send(StorageCommand::SaveSnapshots { slot, response: tx })?;
         rx.await?
     }
+
+    /// Shutdown the storage manager gracefully
+    pub async fn shutdown(&self) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.sender.send(StorageCommand::Shutdown { response: tx })?;
+        rx.await.map_err(|e| anyhow::anyhow!("Shutdown response error: {}", e))
+    }
 }
 
 /// Storage manager task
@@ -472,13 +484,18 @@ impl StorageManager {
     /// Run the storage manager event loop
     pub async fn run(mut self) {
         while let Some(command) = self.receiver.recv().await {
-            self.handle_command(command);
+            if !self.handle_command(command) {
+                break;
+            }
         }
 
         tracing::info!("Storage manager shutting down");
+        // Explicitly drop storage to release session lock
+        drop(self.storage);
     }
 
-    fn handle_command(&mut self, command: StorageCommand) {
+    /// Handle a command. Returns false if the manager should shut down.
+    fn handle_command(&mut self, command: StorageCommand) -> bool {
         match command {
             StorageCommand::StoreChainTip { slot, hash, timestamp, response } => {
                 let result = if let Some(ref mut storage) = self.storage {
@@ -772,6 +789,15 @@ impl StorageManager {
                 };
                 let _ = response.send(result);
             }
+
+            StorageCommand::Shutdown { response } => {
+                // Signal shutdown and drop storage immediately
+                self.storage = None;
+                let _ = response.send(());
+                return false; // Signal to stop the run loop
+            }
         }
+
+        true // Continue processing commands
     }
 }
