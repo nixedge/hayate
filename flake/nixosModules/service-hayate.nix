@@ -129,6 +129,7 @@
             Type = "simple";
             User = cfg.user;
             Group = cfg.group;
+            SupplementaryGroups = ["cardano-node"];
             Restart = "always";
             RestartSec = "30s";
             TimeoutStartSec = "600";
@@ -152,7 +153,6 @@
             ProtectSystem = "strict";
             ProtectHome = true;
             ReadWritePaths = ["/var/lib/hayate"];
-            BindReadOnlyPaths = ["/run/cardano-node"];
           };
         };
 
