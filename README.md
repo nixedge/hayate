@@ -114,6 +114,34 @@ just fmt
 just build-release
 ```
 
+## Testing
+
+Hayate includes comprehensive test coverage:
+
+```bash
+# Run standard unit and integration tests
+cargo test
+
+# Run live integration tests (requires running node at localhost:50051)
+./run-live-tests.sh
+
+# Or run directly:
+cargo test --test live_integration_tests -- --ignored --nocapture
+
+# Run specific live test
+cargo test --test live_integration_tests test_live_get_chain_tip -- --ignored --nocapture
+
+# Run with custom endpoint
+HAYATE_API=http://127.0.0.1:50053 cargo test --test live_integration_tests -- --ignored --nocapture
+```
+
+**Test Categories:**
+- **Unit tests** - Component-level testing with mocked dependencies
+- **Integration tests** - Multi-component testing with temporary storage
+- **Live integration tests** - End-to-end testing against a running Hayate node (marked `#[ignore]`)
+
+The live integration tests verify the full stack against real blockchain data but are excluded from default test runs and CI/nix builds. See `tests/README.md` for detailed documentation.
+
 ## Storage
 
 Uses `cardano-lsm` for efficient blockchain storage:
