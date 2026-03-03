@@ -1,6 +1,6 @@
 // CLI argument parsing for Hayate
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser, Debug)]
 #[command(name = "hayate")]
@@ -69,6 +69,22 @@ pub enum Command {
         #[arg(short = 'd', long)]
         db_path: Option<String>,
     },
+
+    /// Generate shell completions
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: Shell,
+    },
+}
+
+#[derive(ValueEnum, Clone, Debug)]
+pub enum Shell {
+    Bash,
+    Zsh,
+    Fish,
+    PowerShell,
+    Elvish,
 }
 
 #[derive(Subcommand, Debug)]
