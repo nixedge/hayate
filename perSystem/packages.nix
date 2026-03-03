@@ -41,6 +41,7 @@
       nativeBuildInputs = with pkgs; [
         pkg-config
         protobuf
+        installShellFiles
       ];
 
       # Link cardano-lsm from flake input as a path dependency
@@ -68,6 +69,19 @@
         // {
           inherit cargoArtifacts;
           doCheck = true;
+
+          # Generate and install shell completions
+          postInstall = ''
+            # Generate completions for each shell
+            for shell in bash zsh fish; do
+              $out/bin/hayate completions $shell > hayate.$shell
+            done
+
+            # Install completions
+            installShellCompletion --bash hayate.bash
+            installShellCompletion --zsh hayate.zsh
+            installShellCompletion --fish hayate.fish
+          '';
         });
     };
   };

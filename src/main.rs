@@ -13,7 +13,7 @@ mod api;
 mod config;
 mod wallet_stats;
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use tracing::info;
 use std::sync::Arc;
 use indexer::{HayateIndexer, Network};
@@ -241,6 +241,25 @@ async fn handle_config_command(config_cmd: &cli::ConfigCommand) -> anyhow::Resul
     }
 }
 
+fn handle_completions_command(shell: &cli::Shell) -> anyhow::Result<()> {
+    use clap_complete::{generate, Shell as ClapShell};
+    use std::io;
+
+    let mut cmd = Args::command();
+    let bin_name = cmd.get_name().to_string();
+
+    let clap_shell = match shell {
+        cli::Shell::Bash => ClapShell::Bash,
+        cli::Shell::Zsh => ClapShell::Zsh,
+        cli::Shell::Fish => ClapShell::Fish,
+        cli::Shell::PowerShell => ClapShell::PowerShell,
+        cli::Shell::Elvish => ClapShell::Elvish,
+    };
+
+    generate(clap_shell, &mut cmd, bin_name, &mut io::stdout());
+    Ok(())
+}
+
 async fn handle_rollback_command(
     epoch: u64,
     network_str: Option<String>,
@@ -331,6 +350,9 @@ async fn main() -> anyhow::Result<()> {
         }
         Some(cli::Command::Rollback { epoch, network, db_path }) => {
             return handle_rollback_command(*epoch, network.clone(), db_path.clone()).await;
+        }
+        Some(cli::Command::Completions { shell }) => {
+            return handle_completions_command(shell);
         }
         Some(cli::Command::Sync { .. }) | None => {
             // Continue with sync (default behavior)
