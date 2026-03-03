@@ -5,7 +5,7 @@
 pub mod block_processor;
 pub mod storage_manager;
 
-use cardano_lsm::{LsmTree, LsmConfig, MonoidalLsmTree, IncrementalMerkleTree, Key, Value};
+use cardano_lsm::{LsmTree, LsmConfig, MonoidalLsmTree, IncrementalMerkleTree, Key, Value, PersistentSnapshot};
 use std::path::PathBuf;
 use std::collections::HashMap;
 use tokio::sync::{RwLock, broadcast};
@@ -129,27 +129,132 @@ pub struct NetworkStorage {
     pub indexing_start_epoch: u64,
 }
 
-/// Helper to find the latest snapshot for an LSM tree
-fn get_latest_snapshot(tree_path: &std::path::Path) -> Result<Option<String>> {
-    let temp_tree = LsmTree::open(tree_path, LsmConfig::default())?;
-    let snapshots = temp_tree.list_snapshots()?;
+/// Open an LSM tree, restoring from latest valid snapshot if available
+///
+/// This function implements graceful degradation:
+/// 1. Lists all snapshots in reverse chronological order
+/// 2. Validates each snapshot (checks file existence and checksums)
+/// 3. Deletes invalid/corrupted snapshots
+/// 4. Falls back to previous snapshots if the latest is corrupted
+/// 5. Falls back to empty tree if no valid snapshots exist
+fn open_lsm_tree_with_snapshot(tree_path: std::path::PathBuf) -> Result<LsmTree> {
+    let tree_name = tree_path.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("unknown");
+
+    // List all available snapshots
+    let temp_tree = LsmTree::open(&tree_path, LsmConfig::default())?;
+    let mut snapshots = temp_tree.list_snapshots()?;
+    drop(temp_tree); // Release lock before attempting to open snapshots
 
     if snapshots.is_empty() {
-        return Ok(None);
+        tracing::info!("No snapshots found for {}, starting from empty state", tree_name);
+        return Ok(LsmTree::open(tree_path, LsmConfig::default())?);
     }
 
-    // Snapshots are named "slot-{:020}" so lexicographic sort gives us chronological order
-    Ok(snapshots.into_iter().max())
-}
+    // Sort in reverse chronological order (newest first)
+    // Snapshots are named "slot-{:020}" so reverse lexicographic sort works
+    snapshots.sort();
+    snapshots.reverse();
 
-/// Open an LSM tree, restoring from latest snapshot if available
-fn open_lsm_tree_with_snapshot(tree_path: std::path::PathBuf) -> Result<LsmTree> {
-    if let Some(snapshot_name) = get_latest_snapshot(&tree_path)? {
-        tracing::info!("Restoring {:?} from snapshot: {}", tree_path.file_name().unwrap_or_default(), snapshot_name);
-        Ok(LsmTree::open_snapshot(tree_path, &snapshot_name)?)
-    } else {
-        Ok(LsmTree::open(tree_path, LsmConfig::default())?)
+    tracing::info!("Found {} snapshot(s) for {}, attempting to restore from latest valid snapshot",
+                   snapshots.len(), tree_name);
+
+    let mut attempted_snapshots = Vec::new();
+    let mut deleted_snapshots = Vec::new();
+
+    // Try each snapshot in reverse chronological order
+    for snapshot_name in snapshots {
+        attempted_snapshots.push(snapshot_name.clone());
+
+        tracing::debug!("Attempting to load snapshot {} for {}", snapshot_name, tree_name);
+
+        // First, validate the snapshot before attempting to open it
+        match PersistentSnapshot::load(&tree_path, &snapshot_name) {
+            Ok(snapshot) => {
+                match snapshot.validate() {
+                    Ok(()) => {
+                        // Snapshot is valid, try to open it
+                        tracing::info!("Snapshot {} validated successfully, opening {} from this snapshot",
+                                      snapshot_name, tree_name);
+
+                        match LsmTree::open_snapshot(&tree_path, &snapshot_name) {
+                            Ok(tree) => {
+                                if !deleted_snapshots.is_empty() {
+                                    tracing::warn!("Deleted {} corrupted snapshot(s) for {}: {}",
+                                                  deleted_snapshots.len(),
+                                                  tree_name,
+                                                  deleted_snapshots.join(", "));
+                                }
+                                tracing::info!("Successfully restored {} from snapshot {}", tree_name, snapshot_name);
+                                return Ok(tree);
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to open validated snapshot {} for {}: {}",
+                                              snapshot_name, tree_name, e);
+                                tracing::warn!("Deleting snapshot {} and trying previous snapshot", snapshot_name);
+
+                                // Delete the corrupted snapshot
+                                if let Err(delete_err) = snapshot.delete() {
+                                    tracing::error!("Failed to delete corrupted snapshot {}: {}",
+                                                  snapshot_name, delete_err);
+                                } else {
+                                    deleted_snapshots.push(snapshot_name.clone());
+                                }
+                                continue;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Snapshot {} validation failed for {}: {}", snapshot_name, tree_name, e);
+                        tracing::info!("Deleting corrupted snapshot {} and trying previous snapshot", snapshot_name);
+
+                        // Delete the corrupted snapshot
+                        if let Err(delete_err) = snapshot.delete() {
+                            tracing::error!("Failed to delete corrupted snapshot {}: {}", snapshot_name, delete_err);
+                        } else {
+                            deleted_snapshots.push(snapshot_name.clone());
+                        }
+                        continue;
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to load snapshot metadata for {} ({}): {}",
+                              snapshot_name, tree_name, e);
+                tracing::info!("Attempting to delete corrupted snapshot directory {}", snapshot_name);
+
+                // Try to delete the corrupted snapshot directory directly
+                let snapshot_path = tree_path.join("snapshots").join(&snapshot_name);
+                if let Err(delete_err) = std::fs::remove_dir_all(&snapshot_path) {
+                    tracing::error!("Failed to delete corrupted snapshot directory {}: {}",
+                                  snapshot_name, delete_err);
+                } else {
+                    deleted_snapshots.push(snapshot_name.clone());
+                }
+                continue;
+            }
+        }
     }
+
+    // No valid snapshots found
+    if !deleted_snapshots.is_empty() {
+        tracing::error!(
+            "All {} snapshot(s) for {} were corrupted and have been deleted: {}",
+            deleted_snapshots.len(),
+            tree_name,
+            deleted_snapshots.join(", ")
+        );
+    }
+
+    tracing::warn!(
+        "No valid snapshots found for {} after checking {} snapshot(s). Starting from empty state. \
+         This will require a full resync from the network.",
+        tree_name,
+        attempted_snapshots.len()
+    );
+
+    Ok(LsmTree::open(tree_path, LsmConfig::default())?)
 }
 
 impl NetworkStorage {
