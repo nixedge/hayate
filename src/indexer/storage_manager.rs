@@ -211,6 +211,12 @@ pub enum StorageCommand {
         response: oneshot::Sender<Result<()>>,
     },
 
+    /// Cleanup old snapshots from all LSM trees
+    CleanupSnapshots {
+        keep_latest: Option<usize>,
+        response: oneshot::Sender<Result<()>>,
+    },
+
     /// Shutdown the storage manager
     Shutdown {
         response: oneshot::Sender<()>,
@@ -449,6 +455,13 @@ impl StorageHandle {
     pub async fn save_snapshots(&self, slot: u64) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.sender.send(StorageCommand::SaveSnapshots { slot, response: tx })?;
+        rx.await?
+    }
+
+    /// Cleanup old snapshots from all LSM trees
+    pub async fn cleanup_snapshots(&self, keep_latest: Option<usize>) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.sender.send(StorageCommand::CleanupSnapshots { keep_latest, response: tx })?;
         rx.await?
     }
 
@@ -784,6 +797,15 @@ impl StorageManager {
             StorageCommand::SaveSnapshots { slot, response } => {
                 let result = if let Some(ref mut storage) = self.storage {
                     storage.save_all_snapshots(slot)
+                } else {
+                    Err(anyhow::anyhow!("Storage not available"))
+                };
+                let _ = response.send(result);
+            }
+
+            StorageCommand::CleanupSnapshots { keep_latest, response } => {
+                let result = if let Some(ref mut storage) = self.storage {
+                    storage.cleanup_all_snapshots(keep_latest)
                 } else {
                     Err(anyhow::anyhow!("Storage not available"))
                 };

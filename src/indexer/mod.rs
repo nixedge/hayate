@@ -83,6 +83,10 @@ impl Network {
 /// Storage for a single network
 pub struct NetworkStorage {
     pub network: Network,
+
+    // Base path for this network's storage
+    network_path: PathBuf,
+
     pub utxo_tree: LsmTree,
     pub balance_tree: MonoidalLsmTree<u64>,
     pub governance_tree: LsmTree,
@@ -282,6 +286,7 @@ impl NetworkStorage {
 
         Ok(Self {
             network,
+            network_path: network_path.clone(),
             utxo_tree,
             balance_tree,
             governance_tree,
@@ -625,6 +630,75 @@ impl NetworkStorage {
         self.rewards_tracker.save_snapshot(slot)?;
 
         tracing::info!("Saved snapshots for all trees at slot {}", slot);
+        Ok(())
+    }
+
+    /// Cleanup old snapshots from all LSM trees, keeping only the N most recent
+    ///
+    /// This should be called after save_all_snapshots() to prevent unbounded
+    /// accumulation of snapshots which severely impacts snapshot creation performance.
+    ///
+    /// # Arguments
+    /// * `keep_latest` - Number of snapshots to keep (default: 10)
+    pub fn cleanup_all_snapshots(&mut self, keep_latest: Option<usize>) -> Result<()> {
+        use crate::snapshot_manager::SnapshotManager;
+
+        let keep = keep_latest.unwrap_or(10);
+        let snapshot_manager = SnapshotManager::default();
+
+        tracing::debug!("Cleaning up old snapshots, keeping {} most recent", keep);
+
+        // Track cleanup stats
+        let mut total_cleaned = 0;
+        let mut errors = Vec::new();
+
+        // Cleanup function for a single tree
+        let mut cleanup_tree = |tree_subdir: &str, tree_name: &str| {
+            let tree_path = self.network_path.join(tree_subdir);
+            match snapshot_manager.cleanup_old_snapshots(&tree_path, Some(keep)) {
+                Ok(()) => {
+                    // Count how many were deleted by checking directory
+                    if let Ok(snapshots_dir) = std::fs::read_dir(tree_path.join("snapshots")) {
+                        let remaining = snapshots_dir.filter(|e| e.is_ok()).count();
+                        let deleted = if remaining < keep { 0 } else { remaining - keep };
+                        if deleted > 0 {
+                            total_cleaned += deleted;
+                            tracing::debug!("Cleaned {} old snapshot(s) from {}", deleted, tree_name);
+                        }
+                    }
+                }
+                Err(e) => {
+                    errors.push(format!("{}: {}", tree_name, e));
+                }
+            }
+        };
+
+        // Cleanup all LSM trees
+        cleanup_tree("utxos", "utxos");
+        cleanup_tree("governance", "governance");
+        cleanup_tree("nonces", "nonces");
+        cleanup_tree("chain_tip", "chain_tip");
+        cleanup_tree("address_utxos", "address_utxos");
+        cleanup_tree("address_txs", "address_txs");
+        cleanup_tree("policy_txs", "policy_txs");
+        cleanup_tree("asset_txs", "asset_txs");
+        cleanup_tree("spent_utxos", "spent_utxos");
+        cleanup_tree("block_events", "block_events");
+        cleanup_tree("block_hash_index", "block_hash_index");
+
+        // Cleanup rewards tracker snapshots (3 trees)
+        cleanup_tree("rewards/pool_stake", "rewards/pool_stake");
+        cleanup_tree("rewards/wallet_rewards", "rewards/wallet_rewards");
+        cleanup_tree("rewards/reward_snapshots", "rewards/reward_snapshots");
+
+        if !errors.is_empty() {
+            tracing::warn!("Snapshot cleanup encountered {} error(s): {}", errors.len(), errors.join("; "));
+        }
+
+        if total_cleaned > 0 {
+            tracing::info!("Cleaned up {} old snapshot(s) across all trees", total_cleaned);
+        }
+
         Ok(())
     }
 }

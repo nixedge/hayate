@@ -286,6 +286,13 @@ impl BlockProcessor {
             } else {
                 self.snapshot_manager.record_snapshot(slot, epoch);
                 tracing::info!("✓ Saved snapshots at slot {}, epoch {}", slot, epoch);
+
+                // Cleanup old snapshots to prevent unbounded accumulation
+                // This dramatically improves snapshot creation performance
+                if let Err(e) = self.storage.cleanup_snapshots(Some(10)).await {
+                    tracing::warn!("Failed to cleanup old snapshots: {}", e);
+                    // Non-fatal - continue processing
+                }
             }
         }
 
