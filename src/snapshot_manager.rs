@@ -149,7 +149,6 @@ impl SnapshotManager {
     /// # Arguments
     /// * `tree_path` - Path to the LSM tree directory
     /// * `keep_latest` - Number of snapshots to keep (default: uses max_snapshots)
-    #[allow(dead_code)]
     pub fn cleanup_old_snapshots(&self, tree_path: &Path, keep_latest: Option<usize>) -> Result<()> {
         let keep = keep_latest.unwrap_or(self.max_snapshots);
         let snapshots_dir = tree_path.join("snapshots");
