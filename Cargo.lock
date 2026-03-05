@@ -936,6 +936,8 @@ dependencies = [
  "pallas-network",
  "pallas-primitives",
  "pallas-traverse",
+ "pallas-txbuilder",
+ "pallas-wallet",
  "proptest",
  "prost",
  "prost-types",

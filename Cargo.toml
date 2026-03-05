@@ -61,6 +61,8 @@ pallas-configs = "0.35.0"
 pallas = "0.35.0"
 pallas-codec = "0.35.0"
 pallas-primitives = "0.35.0"
+pallas-txbuilder = "0.35.0"
+pallas-wallet = "0.35.0"
 
 # Crypto and key derivation
 bip39 = "2"
