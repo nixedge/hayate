@@ -16,6 +16,7 @@ A lightweight, efficient Cardano blockchain indexer that implements the UTxORPC 
 - 👛 **Smart tracking** - BIP44 gap limit address discovery
 - 📊 **Staking rewards** - Following cardano-wallet pattern
 - 🏛️ **Full governance** - All proposals, votes from tracked wallets
+- 📜 **Plutus transactions** - Native support for script transactions and contract deployment
 - 🎯 **Efficient** - LSM tree storage, ~1MB per 1000 wallets per year
 - 🦀 **Pure Rust** - Safe, fast, cross-platform
 
@@ -98,6 +99,44 @@ hayate --network preprod --addresses addr1_alice addr1_bob
 hayate --from-genesis
 ```
 
+## Plutus Transaction Support
+
+Hayate includes native support for building and submitting Plutus script transactions (Conway era):
+
+```rust
+use hayate::wallet::plutus::*;
+use hayate::wallet::tx_builder::*;
+
+// Deploy a PlutusV2 script with inline datum
+let script = PlutusScript::v2_from_cbor(script_bytes)?;
+let mut builder = PlutusTransactionBuilder::new(Network::Testnet, change_addr);
+
+// Add inputs, outputs, collateral
+builder.add_input(&PlutusInput::regular(utxo))?;
+builder.add_output(&PlutusOutput::new(script.address(Network::Testnet)?, 50_000_000)
+    .with_datum(DatumOption::inline(datum_bytes)))?;
+builder.add_collateral(&collateral_utxo)?;
+
+// Build transaction
+builder
+    .set_fee(200_000)
+    .set_ttl(slot + 1000)
+    .set_network_id()
+    .set_default_language_view(PlutusVersion::V2);
+
+let (tx_bytes, tx_hash) = builder.build()?;
+```
+
+Features:
+- Full PlutusV1/V2/V3 support via pallas-txbuilder
+- Script address calculation (BLAKE2b-224)
+- Inline datums and datum hashes
+- Redeemers with execution units
+- Standard cost models for all Plutus versions
+- Conway-era transaction format
+
+See [`docs/plutus-transactions.md`](docs/plutus-transactions.md) and [`examples/deploy_plutus_contract.rs`](examples/deploy_plutus_contract.rs) for more details.
+
 ## Development
 
 ```bash
@@ -156,6 +195,10 @@ Uses `cardano-lsm` for efficient blockchain storage:
 - Live block processing: < 50ms per block
 - Balance query: < 1ms for any address
 - Chain reorg: < 1s for 100 block rollback
+
+## Documentation
+
+- **[Setting Up a New Midnight Network](docs/new-network.md)** - Complete guide for deploying Cardano governance contracts and configuring Hayate as the UTxORPC indexer for a new Midnight federated network
 
 ## License
 
