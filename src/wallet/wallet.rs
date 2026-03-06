@@ -133,6 +133,68 @@ impl Wallet {
     pub fn root_key(&self) -> &XPrv {
         &self.root_key
     }
+
+    /// Get the payment key at given index as pallas_wallet::PrivateKey for signing
+    ///
+    /// This is useful for transaction signing with pallas-txbuilder
+    pub fn payment_signing_key(&self, address_index: u32) -> DerivationResult<pallas_wallet::PrivateKey> {
+        let payment_key = self.payment_key(address_index)?;
+        xprv_to_pallas_privatekey(&payment_key)
+    }
+}
+
+/// Convert ed25519_bip32::XPrv to pallas_wallet::PrivateKey
+fn xprv_to_pallas_privatekey(xprv: &XPrv) -> DerivationResult<pallas_wallet::PrivateKey> {
+    // XPrv is 64 bytes, we need to get the bytes
+    // The as_ref() method returns &[u8]
+    let xprv_bytes: &[u8] = xprv.as_ref();
+
+    if xprv_bytes.len() != 64 {
+        return Err(derivation::DerivationError::DerivationFailed(format!(
+            "Expected 64 bytes for extended key, got {}",
+            xprv_bytes.len()
+        )));
+    }
+
+    // Convert to [u8; 64]
+    let mut bytes = [0u8; 64];
+    bytes.copy_from_slice(xprv_bytes);
+
+    // Create pallas SecretKeyExtended
+    use pallas_crypto::key::ed25519::SecretKeyExtended;
+    let secret_key_extended = SecretKeyExtended::try_from(bytes)
+        .map_err(|e| derivation::DerivationError::DerivationFailed(format!(
+            "Failed to create SecretKeyExtended: {}",
+            e
+        )))?;
+
+    Ok(pallas_wallet::PrivateKey::Extended(secret_key_extended))
+}
+
+/// Convert Ed25519 secret key bytes to pallas_wallet::PrivateKey
+///
+/// This is useful for signing with temporary keys (e.g., for NFT minting)
+pub fn ed25519_secret_to_privatekey(secret_bytes: &[u8]) -> derivation::DerivationResult<pallas_wallet::PrivateKey> {
+    if secret_bytes.len() != 32 {
+        return Err(derivation::DerivationError::DerivationFailed(format!(
+            "Expected 32 bytes for Ed25519 secret key, got {}",
+            secret_bytes.len()
+        )));
+    }
+
+    // Convert to [u8; 32]
+    let mut bytes = [0u8; 32];
+    bytes.copy_from_slice(secret_bytes);
+
+    // Create pallas SecretKey
+    use pallas_crypto::key::ed25519::SecretKey;
+    let secret_key = SecretKey::try_from(bytes)
+        .map_err(|e| derivation::DerivationError::DerivationFailed(format!(
+            "Failed to create SecretKey: {}",
+            e
+        )))?;
+
+    Ok(pallas_wallet::PrivateKey::Normal(secret_key))
 }
 
 #[cfg(test)]
