@@ -130,6 +130,22 @@ impl PlutusOutput {
         self.script_ref = Some(script);
         self
     }
+
+    /// Create an output with assets and inline datum (for contract deployment)
+    pub fn with_assets_and_inline_datum(
+        address: Vec<u8>,
+        lovelace: u64,
+        assets: Vec<AssetData>,
+        datum_bytes: Vec<u8>,
+    ) -> Self {
+        Self {
+            address,
+            lovelace,
+            assets,
+            datum: Some(DatumOption::inline(datum_bytes)),
+            script_ref: None,
+        }
+    }
 }
 
 /// Error type for transaction building

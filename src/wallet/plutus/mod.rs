@@ -6,13 +6,15 @@
 pub mod address;
 pub mod cost_models;
 pub mod datum;
+pub mod oneshot;
 pub mod redeemer;
 pub mod script;
 
 // Re-export commonly used types
 pub use address::{script_address, script_hash, verify_script_hash, Network};
 pub use cost_models::default_cost_model;
-pub use datum::{DatumOption, VersionedMultisig};
+pub use datum::{DatumOption, VersionedMultisig, GovernanceMember};
+pub use oneshot::{OneShotPolicy, TempKeyMintPolicy};
 pub use redeemer::{ExUnits, Redeemer, RedeemerTag};
 pub use script::{PlutusScript, PlutusVersion};
 
@@ -43,6 +45,12 @@ pub enum PlutusError {
 
     #[error("Invalid network: {0}")]
     InvalidNetwork(String),
+
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
+
+    #[error("Not implemented: {0}")]
+    NotImplemented(String),
 }
 
 pub type PlutusResult<T> = Result<T, PlutusError>;

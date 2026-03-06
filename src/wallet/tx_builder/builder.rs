@@ -279,6 +279,65 @@ impl PlutusTransactionBuilder {
         self.set_language_view(plutus_version, cost_model)
     }
 
+    /// Mint an asset
+    ///
+    /// # Arguments
+    /// * `policy_id` - The minting policy ID (28 bytes)
+    /// * `asset_name` - The asset name (max 32 bytes)
+    /// * `amount` - The amount to mint (positive) or burn (negative)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use hayate::wallet::plutus::Network;
+    /// # use hayate::wallet::tx_builder::PlutusTransactionBuilder;
+    /// let mut builder = PlutusTransactionBuilder::new(Network::Testnet, vec![0; 57]);
+    /// let policy_id = [1u8; 28];
+    /// builder.mint_asset(policy_id, b"NFT".to_vec(), 1).unwrap();
+    /// ```
+    pub fn mint_asset(
+        &mut self,
+        policy_id: [u8; 28],
+        asset_name: Vec<u8>,
+        amount: i64,
+    ) -> TxBuilderResult<&mut Self> {
+        self.staging_tx = self
+            .staging_tx
+            .clone()
+            .mint_asset(Hash::from(policy_id), asset_name, amount)
+            .map_err(|e| TxBuilderError::BuildError(e.to_string()))?;
+        Ok(self)
+    }
+
+    /// Add a native script for minting
+    ///
+    /// Native scripts are simple scripts that can check signatures, time locks, etc.
+    pub fn add_native_script(&mut self, script_bytes: Vec<u8>) -> TxBuilderResult<&mut Self> {
+        self.staging_tx = self
+            .staging_tx
+            .clone()
+            .script(ScriptKind::Native, script_bytes);
+        Ok(self)
+    }
+
+    /// Add a mint redeemer for Plutus minting policy
+    ///
+    /// Use this when minting with a Plutus minting policy (not native scripts).
+    pub fn add_mint_redeemer(
+        &mut self,
+        policy_id: [u8; 28],
+        redeemer: &Redeemer,
+    ) -> TxBuilderResult<&mut Self> {
+        self.staging_tx = self.staging_tx.clone().add_mint_redeemer(
+            Hash::from(policy_id),
+            redeemer.data_bytes().to_vec(),
+            Some(pallas_txbuilder::ExUnits {
+                mem: redeemer.ex_units.mem,
+                steps: redeemer.ex_units.steps,
+            }),
+        );
+        Ok(self)
+    }
+
     /// Build the transaction
     ///
     /// Returns the transaction CBOR bytes and transaction hash
