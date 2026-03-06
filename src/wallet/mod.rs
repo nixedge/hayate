@@ -9,6 +9,9 @@ pub mod utxorpc_client;
 pub mod cli;
 pub mod plutus;
 pub mod tx_builder;
+pub mod wallet;
 
 pub use storage::*;
 pub use cli::handle_wallet_command;
+pub use wallet::Wallet;
+pub use derivation::Network;
