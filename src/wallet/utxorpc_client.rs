@@ -8,20 +8,29 @@ use crate::api::query::query::{
     query_service_client::QueryServiceClient,
     ReadUtxosRequest, GetChainTipRequest,
 };
+use crate::api::submit::submit::{
+    submit_service_client::SubmitServiceClient,
+    SubmitTxRequest, SubmitTxResponse,
+};
 
 /// UTxORPC client wrapper for wallet operations
 pub struct WalletUtxorpcClient {
     client: QueryServiceClient<Channel>,
+    submit_client: SubmitServiceClient<Channel>,
 }
 
 impl WalletUtxorpcClient {
     /// Create a new UTxORPC client
     pub async fn connect(endpoint: String) -> Result<Self> {
-        let client = QueryServiceClient::connect(endpoint)
+        let client = QueryServiceClient::connect(endpoint.clone())
             .await
             .context("Failed to connect to UTxORPC endpoint")?;
 
-        Ok(Self { client })
+        let submit_client = SubmitServiceClient::connect(endpoint)
+            .await
+            .context("Failed to connect to UTxORPC submit endpoint")?;
+
+        Ok(Self { client, submit_client })
     }
 
     /// Query UTxOs for given addresses
@@ -135,6 +144,20 @@ impl UtxoData {
     #[allow(dead_code)]
     pub fn format_ref(&self) -> String {
         format!("{}#{}", hex::encode(&self.tx_hash), self.output_index)
+    }
+}
+
+impl WalletUtxorpcClient {
+    /// Submit a signed transaction to the Cardano network
+    pub async fn submit_transaction(&mut self, tx_bytes: Vec<u8>) -> Result<SubmitTxResponse> {
+        let request = SubmitTxRequest { tx: tx_bytes };
+
+        let response = self.submit_client.submit_tx(request)
+            .await
+            .context("Failed to submit transaction")?
+            .into_inner();
+
+        Ok(response)
     }
 }
 
