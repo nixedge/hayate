@@ -28,8 +28,8 @@ pub async fn handle_wallet_command(
             handle_init(&storage, name, gpg_recipient.as_deref(), *words, network)?;
         }
 
-        WalletCommand::Add { name, mnemonic, gpg_recipient, network } => {
-            handle_add(&storage, name, mnemonic.as_deref(), gpg_recipient.as_deref(), network)?;
+        WalletCommand::Add { name, mnemonic, mnemonic_file, gpg_recipient, network } => {
+            handle_add(&storage, name, mnemonic.as_deref(), mnemonic_file.as_deref(), gpg_recipient.as_deref(), network)?;
         }
 
         WalletCommand::List => {
@@ -154,9 +154,15 @@ fn handle_add(
     storage: &WalletStorage,
     name: &str,
     mnemonic: Option<&str>,
+    mnemonic_file: Option<&std::path::Path>,
     gpg_recipient: Option<&str>,
     network_str: &str,
 ) -> Result<()> {
+    // Check for conflicting mnemonic sources
+    if mnemonic.is_some() && mnemonic_file.is_some() {
+        anyhow::bail!("Cannot specify both --mnemonic and --mnemonic-file");
+    }
+
     // Check if GPG is required
     if let Some(recipient) = gpg_recipient {
         if !Gpg::is_available() {
@@ -168,8 +174,11 @@ fn handle_add(
     // Parse network
     let network = parse_network(network_str)?;
 
-    // Get mnemonic from user
-    let mnemonic_phrase = if let Some(m) = mnemonic {
+    // Get mnemonic from file, command line, or user input
+    let mnemonic_phrase = if let Some(file) = mnemonic_file {
+        // Read from file with GPG support
+        read_mnemonic_from_file(file)?
+    } else if let Some(m) = mnemonic {
         m.to_string()
     } else {
         println!("Enter your recovery phrase:");
@@ -316,6 +325,28 @@ fn format_timestamp(timestamp: u64) -> String {
     // Simple formatting - just show the timestamp for now
     // In production, you might want to use chrono for better formatting
     format!("{:?}", datetime)
+}
+
+/// Read mnemonic from a file (supports GPG encryption)
+fn read_mnemonic_from_file(path: &std::path::Path) -> Result<String> {
+    // Check if file exists
+    if !path.exists() {
+        anyhow::bail!("Mnemonic file not found: {}", path.display());
+    }
+
+    // Check if file is GPG encrypted
+    let contents = if Gpg::is_encrypted(path) {
+        // Decrypt GPG file
+        println!("🔓 Decrypting GPG-encrypted mnemonic file...");
+        Gpg::decrypt_file(path)
+            .context("Failed to decrypt GPG file")?
+    } else {
+        // Read plain text file
+        std::fs::read_to_string(path)
+            .context("Failed to read mnemonic file")?
+    };
+
+    Ok(contents.trim().to_string())
 }
 
 // Transaction command handlers

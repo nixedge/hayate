@@ -116,6 +116,10 @@ pub enum WalletCommand {
         #[arg(long)]
         mnemonic: Option<String>,
 
+        /// Mnemonic file path (supports GPG encryption)
+        #[arg(long)]
+        mnemonic_file: Option<std::path::PathBuf>,
+
         /// GPG recipient for encryption (email or key ID)
         #[arg(long)]
         gpg_recipient: Option<String>,
