@@ -13,5 +13,5 @@ pub mod wallet;
 
 pub use storage::*;
 pub use cli::handle_wallet_command;
-pub use wallet::Wallet;
+pub use wallet::{Wallet, ed25519_secret_to_privatekey};
 pub use derivation::Network;
