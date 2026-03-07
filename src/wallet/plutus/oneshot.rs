@@ -61,7 +61,7 @@ impl OneShotPolicy {
     /// Build native script CBOR bytes
     ///
     /// Native script structure (using ScriptAll):
-    /// ```
+    /// ```text
     /// ScriptAll [
     ///   ScriptPubkey <pubkey_hash>,
     ///   ScriptNofK 1 [

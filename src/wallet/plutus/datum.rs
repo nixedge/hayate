@@ -59,7 +59,7 @@ pub struct GovernanceMember {
 /// VersionedMultisig datum for governance contracts
 ///
 /// CBOR structure:
-/// ```
+/// ```text
 /// Constructor 0 [
 ///   Constructor 0 [
 ///     threshold: Int,
