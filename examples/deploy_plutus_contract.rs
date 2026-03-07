@@ -7,8 +7,7 @@
 // before launching a new Midnight network.
 
 use hayate::wallet::plutus::{
-    default_cost_model, DatumOption, Network, PlutusScript, PlutusVersion, Redeemer,
-    RedeemerTag, VersionedMultisig,
+    datum::datum_hash, DatumOption, Network, PlutusScript, PlutusVersion, VersionedMultisig,
 };
 use hayate::wallet::tx_builder::{PlutusInput, PlutusOutput, PlutusTransactionBuilder};
 use hayate::wallet::utxorpc_client::UtxoData;
@@ -51,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Datum CBOR: {}", hex::encode(&datum_cbor));
     println!(
         "Datum hash: {}\n",
-        hex::encode(hayate::wallet::plutus::datum_hash(&datum_cbor))
+        hex::encode(datum_hash(&datum_cbor))
     );
 
     // 3. Create the transaction builder
