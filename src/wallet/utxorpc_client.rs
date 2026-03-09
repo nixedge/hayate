@@ -58,6 +58,7 @@ use crate::api::submit::submit::{
 };
 
 /// UTxORPC client wrapper for wallet operations
+#[derive(Clone)]
 pub struct WalletUtxorpcClient {
     client: QueryServiceClient<Channel>,
     submit_client: SubmitServiceClient<Channel>,

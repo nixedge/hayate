@@ -40,6 +40,7 @@ impl Network {
 }
 
 /// HD wallet account
+#[derive(Clone)]
 #[allow(dead_code)]
 pub struct Account {
     #[allow(dead_code)]
