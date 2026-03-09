@@ -159,6 +159,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore] // Requires running node
     async fn test_query_mainnet_defaults() {
         let mut query = ProtocolParamQuery::new("localhost:3001".to_string(), 764824073);
         let params = query.query_current_params().await.unwrap();
@@ -167,6 +168,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore] // Requires running node
     async fn test_query_preprod_defaults() {
         let mut query = ProtocolParamQuery::new("localhost:3001".to_string(), 1);
         let params = query.query_current_params().await.unwrap();
