@@ -145,6 +145,11 @@ impl Wallet {
         Ok(payment_key)
     }
 
+    /// Get the account for debugging
+    pub fn account(&self) -> &Account {
+        &self.account
+    }
+
     /// Get the stake key for this account
     pub fn stake_key(&self) -> &XPrv {
         &self.account.stake_key

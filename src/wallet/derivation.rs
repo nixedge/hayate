@@ -3,9 +3,11 @@
 // https://cips.cardano.org/cip/CIP-1852
 
 use bip39::Mnemonic;
-use ed25519_bip32::{XPrv, XPub, DerivationScheme};
+use ed25519_bip32::{XPrv, XPub, DerivationScheme, XPRV_SIZE};
 use pallas_addresses::{Address, Network as PallasNetwork, ShelleyAddress, ShelleyPaymentPart, ShelleyDelegationPart};
-use pallas_crypto::hash::{Hash, Hasher};
+use pallas_crypto::key::ed25519::PublicKey;
+use pallas_traverse::ComputeHash;
+use cryptoxide::{hmac::Hmac, pbkdf2::pbkdf2, sha2::Sha512};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -51,48 +53,31 @@ pub struct Account {
 }
 
 /// Derive root key from mnemonic
-/// Uses BIP39 for entropy and Cardano's ICARUS derivation
+/// Uses ICARUS derivation: PBKDF2-HMAC-SHA512 with 4096 iterations
 pub fn derive_root_key(mnemonic: &Mnemonic) -> DerivationResult<XPrv> {
     // Get entropy bytes from mnemonic
     let entropy = mnemonic.to_entropy();
 
-    // For Cardano, we use the entropy directly as the seed (ICARUS derivation)
-    // This is different from BIP39's PBKDF2-based seed derivation
-    // We need 96 bytes for ed25519-bip32
-    // Since pallas only supports specific sizes, we'll use blake2b-256 three times
-    let mut seed = [0u8; 96];
-
-    // First 32 bytes
-    let mut hasher1 = Hasher::<256>::new();
-    hasher1.input(&entropy);
-    hasher1.input(&[0u8]); // Domain separator
-    let hash1 = hasher1.finalize();
-    seed[0..32].copy_from_slice(hash1.as_ref());
-
-    // Second 32 bytes
-    let mut hasher2 = Hasher::<256>::new();
-    hasher2.input(&entropy);
-    hasher2.input(&[1u8]); // Domain separator
-    let hash2 = hasher2.finalize();
-    seed[32..64].copy_from_slice(hash2.as_ref());
-
-    // Last 32 bytes
-    let mut hasher3 = Hasher::<256>::new();
-    hasher3.input(&entropy);
-    hasher3.input(&[2u8]); // Domain separator
-    let hash3 = hasher3.finalize();
-    seed[64..96].copy_from_slice(hash3.as_ref());
+    // ICARUS derivation: PBKDF2-HMAC-SHA512
+    // - Password: entropy
+    // - Salt: empty string
+    // - Iterations: 4096
+    // - Output: 96 bytes for ed25519-bip32
+    let mut pbkdf2_result = [0; XPRV_SIZE];
+    const ITER: u32 = 4096;
+    let mut mac = Hmac::new(Sha512::new(), "".as_bytes());
+    pbkdf2(&mut mac, &entropy, ITER, &mut pbkdf2_result);
 
     // Derive root private key using V2 scheme (Shelley)
-    Ok(XPrv::normalize_bytes_force3rd(seed))
+    Ok(XPrv::normalize_bytes_force3rd(pbkdf2_result))
 }
 
 /// Derive account keys for a given account index
 /// Follows CIP-1852 path: m/1852'/1815'/account'/role/index
 pub fn derive_account(root: &XPrv, account_index: u32) -> DerivationResult<Account> {
     // m/1852'/1815'/account'
-    let purpose = root.derive(DerivationScheme::V2, 0x8000076C); // 1852'
-    let coin_type = purpose.derive(DerivationScheme::V2, 0x80000717); // 1815'
+    let purpose = root.derive(DerivationScheme::V2, 0x80000000 | 1852); // 1852'
+    let coin_type = purpose.derive(DerivationScheme::V2, 0x80000000 | 1815); // 1815'
     let account_key = coin_type.derive(DerivationScheme::V2, 0x80000000 | account_index);
 
     // Payment key: m/1852'/1815'/account'/0/0
@@ -119,26 +104,27 @@ pub fn derive_payment_address(
     _stake_key: &XPrv,
     network: Network,
 ) -> DerivationResult<String> {
+    // Derive using public key derivation (same as keys.rs)
+    let account_xpub: XPub = account_key.public();
+
     // Derive payment key at index
-    let payment_chain = account_key.derive(DerivationScheme::V2, 0);
-    let payment_key = payment_chain.derive(DerivationScheme::V2, address_index);
-    let payment_pub: XPub = payment_key.public();
+    let payment_chain_xpub = account_xpub.derive(DerivationScheme::V2, 0)
+        .map_err(|e| DerivationError::DerivationFailed(format!("Failed to derive payment chain: {}", e)))?;
+    let payment_xpub = payment_chain_xpub.derive(DerivationScheme::V2, address_index)
+        .map_err(|e| DerivationError::DerivationFailed(format!("Failed to derive payment key: {}", e)))?;
 
-    // Get stake public key
-    let stake_chain = account_key.derive(DerivationScheme::V2, 2);
-    let stake_key_derived = stake_chain.derive(DerivationScheme::V2, 0);
-    let stake_pub: XPub = stake_key_derived.public();
+    // Derive stake key
+    let stake_chain_xpub = account_xpub.derive(DerivationScheme::V2, 2)
+        .map_err(|e| DerivationError::DerivationFailed(format!("Failed to derive stake chain: {}", e)))?;
+    let stake_xpub = stake_chain_xpub.derive(DerivationScheme::V2, 0)
+        .map_err(|e| DerivationError::DerivationFailed(format!("Failed to derive stake key: {}", e)))?;
 
-    // XPub is 64 bytes: 32 bytes public key + 32 bytes chain code
-    // For address generation, we only hash the public key (first 32 bytes)
-    let payment_pub_bytes = payment_pub.as_ref();
-    let payment_key_only = &payment_pub_bytes[..32];
-    let stake_pub_bytes = stake_pub.as_ref();
-    let stake_key_only = &stake_pub_bytes[..32];
+    // Get just the public keys (32 bytes each) without chain code and compute hashes
+    let payment_pubkey = PublicKey::from(payment_xpub.public_key());
+    let stake_pubkey = PublicKey::from(stake_xpub.public_key());
 
-    // Create Shelley address
-    let payment_hash = Hash::<28>::from(blake2b_224(payment_key_only));
-    let stake_hash = Hash::<28>::from(blake2b_224(stake_key_only));
+    let payment_hash = payment_pubkey.compute_hash();
+    let stake_hash = stake_pubkey.compute_hash();
 
     let addr = ShelleyAddress::new(
         network.to_pallas(),
@@ -159,11 +145,9 @@ pub fn derive_stake_address(
 ) -> DerivationResult<String> {
     let stake_pub: XPub = stake_key.public();
 
-    // XPub is 64 bytes: 32 bytes public key + 32 bytes chain code
-    // For address generation, we only hash the public key (first 32 bytes)
-    let stake_pub_bytes = stake_pub.as_ref();
-    let stake_key_only = &stake_pub_bytes[..32];
-    let stake_hash = Hash::<28>::from(blake2b_224(stake_key_only));
+    // Get just the public key (32 bytes) without chain code and compute hash
+    let stake_pubkey = PublicKey::from(stake_pub.public_key());
+    let stake_hash = stake_pubkey.compute_hash();
 
     let addr = ShelleyAddress::new(
         network.to_pallas(),
@@ -182,18 +166,17 @@ pub fn derive_enterprise_address(
     address_index: u32,
     network: Network,
 ) -> DerivationResult<String> {
-    // Derive payment key at index
-    let payment_chain = account_key.derive(DerivationScheme::V2, 0);
-    let payment_key = payment_chain.derive(DerivationScheme::V2, address_index);
-    let payment_pub: XPub = payment_key.public();
+    // Derive using public key derivation (same as keys.rs)
+    let account_xpub: XPub = account_key.public();
+    let payment_chain_xpub = account_xpub.derive(DerivationScheme::V2, 0)
+        .map_err(|e| DerivationError::DerivationFailed(format!("Failed to derive payment chain: {}", e)))?;
+    let payment_xpub = payment_chain_xpub.derive(DerivationScheme::V2, address_index)
+        .map_err(|e| DerivationError::DerivationFailed(format!("Failed to derive payment key: {}", e)))?;
 
-    // XPub is 64 bytes: 32 bytes public key + 32 bytes chain code
-    // For address generation, we only hash the public key (first 32 bytes)
-    let payment_pub_bytes = payment_pub.as_ref();
-    let payment_key_only = &payment_pub_bytes[..32];
-
-    // Create payment key hash
-    let payment_hash = Hash::<28>::from(blake2b_224(payment_key_only));
+    // Get just the public key (32 bytes) without chain code and compute hash
+    let payment_pubkey_bytes = payment_xpub.public_key();
+    let payment_pubkey = PublicKey::from(payment_pubkey_bytes);
+    let payment_hash = payment_pubkey.compute_hash();
 
     // Create enterprise address (payment only, no staking)
     let addr = ShelleyAddress::new(
@@ -205,17 +188,6 @@ pub fn derive_enterprise_address(
     Address::Shelley(addr).to_bech32().map_err(|e| {
         DerivationError::AddressGenerationFailed(format!("Failed to encode address: {}", e))
     })
-}
-
-/// Blake2b-224 hash function
-fn blake2b_224(data: &[u8]) -> [u8; 28] {
-    let mut hasher = Hasher::<224>::new(); // 224 bits = 28 bytes
-    hasher.input(data);
-    let hash = hasher.finalize();
-
-    let mut out = [0u8; 28];
-    out.copy_from_slice(hash.as_ref());
-    out
 }
 
 /// Get account xpub from account keys
