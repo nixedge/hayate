@@ -154,7 +154,7 @@ mod tests {
     #[test]
     fn test_protocol_param_query_creation() {
         let query = ProtocolParamQuery::new("localhost:3001".to_string(), 1);
-        assert_eq!(query.relay, "localhost:3001");
+        assert_eq!(query.socket_path, "localhost:3001");
         assert_eq!(query.magic, 1);
     }
 
