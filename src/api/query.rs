@@ -388,11 +388,65 @@ impl QueryService for QueryServiceImpl {
                 timestamp: 0,
             });
 
+        // Query protocol parameters
+        let protocol_params = if let Some(ref socket_path) = self.socket_path {
+            let mut query = crate::node::ProtocolParamQuery::new(socket_path.clone(), self.magic);
+            match query.query_current_params().await {
+                Ok(params) => {
+                    // Convert to proto format
+                    Some(query::read_params_response::ProtocolParams {
+                        min_fee_a: params.min_fee_a,
+                        min_fee_b: params.min_fee_b,
+                        max_tx_size: params.max_tx_size,
+                        max_block_body_size: params.max_block_body_size,
+                        utxo_cost_per_byte: params.utxo_cost_per_byte,
+                        min_utxo_lovelace: params.min_utxo_lovelace.unwrap_or(0),
+                        price_memory: params.price_memory.map(|r| {
+                            query::read_params_response::protocol_params::Rational {
+                                numerator: r.numerator,
+                                denominator: r.denominator,
+                            }
+                        }),
+                        price_steps: params.price_steps.map(|r| {
+                            query::read_params_response::protocol_params::Rational {
+                                numerator: r.numerator,
+                                denominator: r.denominator,
+                            }
+                        }),
+                        max_tx_execution_units: params.max_tx_execution_units.map(|u| {
+                            query::read_params_response::protocol_params::ExUnits {
+                                mem: u.mem,
+                                steps: u.steps,
+                            }
+                        }),
+                        max_block_execution_units: params.max_block_execution_units.map(|u| {
+                            query::read_params_response::protocol_params::ExUnits {
+                                mem: u.mem,
+                                steps: u.steps,
+                            }
+                        }),
+                        key_deposit: params.key_deposit,
+                        pool_deposit: params.pool_deposit,
+                        min_pool_cost: params.min_pool_cost,
+                        epoch: params.epoch,
+                    })
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to query protocol parameters: {}, returning None", e);
+                    None
+                }
+            }
+        } else {
+            tracing::warn!("No socket_path configured, returning None for protocol params");
+            None
+        };
+
         tracing::debug!("ReadParams response: slot={}, hash={}", tip.slot, hex::encode(&tip.hash));
 
         Ok(Response::new(ReadParamsResponse {
             slot: tip.slot,
             hash: tip.hash,
+            protocol_params,
         }))
     }
 

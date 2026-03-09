@@ -12,6 +12,8 @@ mod indexer;
 mod api;
 mod config;
 mod wallet_stats;
+mod protocol_params;
+mod node;
 
 use clap::{CommandFactory, Parser};
 use tracing::info;
