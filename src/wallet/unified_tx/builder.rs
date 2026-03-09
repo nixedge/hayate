@@ -548,7 +548,7 @@ impl UnifiedTxBuilder {
     }
 
     /// Query and cache protocol parameters
-    async fn query_protocol_params(&mut self) -> Result<&ProtocolParameters> {
+    pub async fn query_protocol_params(&mut self) -> Result<&ProtocolParameters> {
         if self.protocol_params.is_none() {
             // Try to query from client if available
             if let Some(ref mut client) = self.client {
