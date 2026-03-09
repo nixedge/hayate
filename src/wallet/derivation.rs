@@ -44,6 +44,7 @@ impl Network {
 pub struct Account {
     #[allow(dead_code)]
     pub account_index: u32,
+    pub account_key: XPrv,
     pub payment_key: XPrv,
     pub stake_key: XPrv,
 }
@@ -91,18 +92,19 @@ pub fn derive_account(root: &XPrv, account_index: u32) -> DerivationResult<Accou
     // m/1852'/1815'/account'
     let purpose = root.derive(DerivationScheme::V2, 0x8000076C); // 1852'
     let coin_type = purpose.derive(DerivationScheme::V2, 0x80000717); // 1815'
-    let account = coin_type.derive(DerivationScheme::V2, 0x80000000 | account_index);
+    let account_key = coin_type.derive(DerivationScheme::V2, 0x80000000 | account_index);
 
     // Payment key: m/1852'/1815'/account'/0/0
-    let payment_chain = account.derive(DerivationScheme::V2, 0);
+    let payment_chain = account_key.derive(DerivationScheme::V2, 0);
     let payment_key = payment_chain.derive(DerivationScheme::V2, 0);
 
     // Stake key: m/1852'/1815'/account'/2/0
-    let stake_chain = account.derive(DerivationScheme::V2, 2);
+    let stake_chain = account_key.derive(DerivationScheme::V2, 2);
     let stake_key = stake_chain.derive(DerivationScheme::V2, 0);
 
     Ok(Account {
         account_index,
+        account_key,
         payment_key,
         stake_key,
     })
@@ -161,6 +163,32 @@ pub fn derive_stake_address(
     })?)
 }
 
+/// Derive enterprise address (payment only, no staking)
+pub fn derive_enterprise_address(
+    account_key: &XPrv,
+    address_index: u32,
+    network: Network,
+) -> DerivationResult<String> {
+    // Derive payment key at index
+    let payment_chain = account_key.derive(DerivationScheme::V2, 0);
+    let payment_key = payment_chain.derive(DerivationScheme::V2, address_index);
+    let payment_pub: XPub = payment_key.public();
+
+    // Create payment key hash
+    let payment_hash = Hash::<28>::from(blake2b_224(payment_pub.as_ref()));
+
+    // Create enterprise address (payment only, no staking)
+    let addr = ShelleyAddress::new(
+        network.to_pallas(),
+        ShelleyPaymentPart::Key(payment_hash),
+        ShelleyDelegationPart::Null, // Enterprise address has no stake component
+    );
+
+    Ok(Address::Shelley(addr).to_bech32().map_err(|e| {
+        DerivationError::AddressGenerationFailed(format!("Failed to encode address: {}", e))
+    })?)
+}
+
 /// Blake2b-224 hash function
 fn blake2b_224(data: &[u8]) -> [u8; 28] {
     let mut hasher = Hasher::<224>::new(); // 224 bits = 28 bytes
@@ -207,13 +235,29 @@ mod tests {
         let account = derive_account(&root, 0).unwrap();
 
         let address = derive_payment_address(
-            &account.payment_key,
+            &account.account_key,
             0,
             &account.stake_key,
             Network::Testnet,
         ).unwrap();
 
         // Should be a valid bech32 address
+        assert!(address.starts_with("addr_test") || address.starts_with("addr"));
+    }
+
+    #[test]
+    fn test_derive_enterprise_address() {
+        let mnemonic = Mnemonic::parse_in(Language::English, TEST_MNEMONIC).unwrap();
+        let root = derive_root_key(&mnemonic).unwrap();
+        let account = derive_account(&root, 0).unwrap();
+
+        let address = derive_enterprise_address(
+            &account.account_key,
+            0,
+            Network::Testnet,
+        ).unwrap();
+
+        // Should be a valid bech32 enterprise address
         assert!(address.starts_with("addr_test") || address.starts_with("addr"));
     }
 }
