@@ -92,7 +92,7 @@ impl Wallet {
     /// Returns bech32-encoded Shelley address (addr1... or addr_test1...)
     pub fn payment_address(&self, address_index: u32) -> DerivationResult<String> {
         derivation::derive_payment_address(
-            &self.root_key,
+            &self.account.account_key,
             address_index,
             &self.account.stake_key,
             self.network,
@@ -109,6 +109,28 @@ impl Wallet {
         Ok(addr.to_vec())
     }
 
+    /// Derive an enterprise address (payment only, no staking)
+    ///
+    /// Enterprise addresses don't have a staking component and are used for
+    /// exchanges, faucets, and other scenarios where staking is not needed.
+    pub fn enterprise_address(&self, address_index: u32) -> DerivationResult<String> {
+        derivation::derive_enterprise_address(
+            &self.account.account_key,
+            address_index,
+            self.network,
+        )
+    }
+
+    /// Derive an enterprise address and return as raw bytes
+    ///
+    /// Useful for transaction building where you need the address bytes directly
+    pub fn enterprise_address_bytes(&self, address_index: u32) -> DerivationResult<Vec<u8>> {
+        let bech32 = self.enterprise_address(address_index)?;
+        let addr = Address::from_bech32(&bech32)
+            .map_err(|e| derivation::DerivationError::AddressGenerationFailed(format!("Failed to decode bech32: {}", e)))?;
+        Ok(addr.to_vec())
+    }
+
     /// Get the payment key at the given address index
     ///
     /// Returns the extended private key for signing
@@ -116,7 +138,7 @@ impl Wallet {
         use ed25519_bip32::DerivationScheme;
 
         // m/1852'/1815'/account'/0/address_index
-        let payment_chain = self.account.payment_key.derive(DerivationScheme::V2, 0);
+        let payment_chain = self.account.account_key.derive(DerivationScheme::V2, 0);
         let payment_key = payment_chain.derive(DerivationScheme::V2, address_index);
 
         Ok(payment_key)
