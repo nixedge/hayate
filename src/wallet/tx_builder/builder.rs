@@ -388,7 +388,7 @@ impl PlutusTransactionBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wallet::plutus::{ExUnits, PlutusVersion, RedeemerTag};
+    use crate::wallet::plutus::RedeemerTag;
     use crate::wallet::utxorpc_client::UtxoData;
 
     #[test]

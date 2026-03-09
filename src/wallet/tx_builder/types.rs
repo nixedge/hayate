@@ -169,7 +169,7 @@ pub enum TransactionBuildError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wallet::plutus::{PlutusVersion, Redeemer, RedeemerTag};
+    use crate::wallet::plutus::{Redeemer, RedeemerTag};
 
     #[test]
     fn test_plutus_input_regular() {
