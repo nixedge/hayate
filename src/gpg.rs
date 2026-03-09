@@ -81,7 +81,7 @@ impl Gpg {
         }
 
         let output = Command::new("gpg")
-            .args(&[
+            .args([
                 "--encrypt",
                 "--armor",
                 "--recipient",
@@ -108,7 +108,7 @@ impl Gpg {
         }
 
         let output = Command::new("gpg")
-            .args(&[
+            .args([
                 "--encrypt",
                 "--armor",
                 "--recipient",
@@ -139,7 +139,7 @@ impl Gpg {
         }
 
         let mut child = Command::new("gpg")
-            .args(&[
+            .args([
                 "--encrypt",
                 "--armor",
                 "--recipient",
@@ -181,7 +181,7 @@ impl Gpg {
         }
 
         let output = Command::new("gpg")
-            .args(&["--decrypt", "--quiet", "--batch"])
+            .args(["--decrypt", "--quiet", "--batch"])
             .arg(path)
             .output()?;
 
@@ -205,7 +205,7 @@ impl Gpg {
         }
 
         let mut child = Command::new("gpg")
-            .args(&["--decrypt", "--quiet", "--batch"])
+            .args(["--decrypt", "--quiet", "--batch"])
             .arg("-")
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())

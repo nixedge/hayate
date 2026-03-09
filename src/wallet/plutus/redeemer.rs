@@ -1,6 +1,5 @@
 // Redeemer types and utilities
 
-use crate::wallet::plutus::PlutusResult;
 use pallas_primitives::conway::{ExUnits as PallasExUnits, RedeemerTag as PallasRedeemerTag};
 
 /// Execution units for Plutus script execution

@@ -297,7 +297,7 @@ impl TransactionBuilder {
 
             policy_map
                 .entry(asset.policy_id.clone())
-                .or_insert_with(BTreeMap::new)
+                .or_default()
                 .insert(asset.asset_name.clone(), asset.amount);
         }
 

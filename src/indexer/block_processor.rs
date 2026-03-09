@@ -13,6 +13,12 @@ pub struct WalletFilter {
     tracked_stake_keys: HashSet<Hash<28>>,
 }
 
+impl Default for WalletFilter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WalletFilter {
     pub fn new() -> Self {
         Self {
@@ -59,7 +65,7 @@ impl WalletFilter {
         };
 
         // Check if this payment key is tracked
-        if !self.is_our_payment_key(&payment_hash) {
+        if !self.is_our_payment_key(payment_hash) {
             return false;
         }
 
@@ -73,7 +79,7 @@ impl WalletFilter {
             ShelleyDelegationPart::Key(stake_hash) => {
                 // Full address - check if stake key is also ours
                 // Accept if stake key matches OR if we're not filtering by stake keys
-                self.tracked_stake_keys.is_empty() || self.is_our_stake_key(&stake_hash)
+                self.tracked_stake_keys.is_empty() || self.is_our_stake_key(stake_hash)
             }
             ShelleyDelegationPart::Script(_) => {
                 // Script stake delegation - accept if payment key is ours
@@ -296,7 +302,7 @@ impl BlockProcessor {
             }
         }
 
-        if self.blocks_processed % 1000 == 0 {
+        if self.blocks_processed.is_multiple_of(1000) {
             tracing::info!(
                 "Progress: {} blocks, slot {}, epoch {}",
                 self.blocks_processed,
@@ -469,8 +475,8 @@ impl BlockProcessor {
 
         // Process outputs (create UTxOs)
         let outputs = tx.outputs();
-        for output_idx in 0..outputs.len() {
-            self.process_output(&outputs[output_idx], &tx_hash, output_idx, slot, block_hash, tx_index, block_timestamp, stats, rollback_info).await?;
+        for (output_idx, output) in outputs.iter().enumerate() {
+            self.process_output(output, &tx_hash, output_idx, slot, block_hash, tx_index, block_timestamp, stats, rollback_info).await?;
         }
 
         // Add transaction to history for all affected addresses
@@ -803,7 +809,7 @@ pub fn slot_to_epoch(slot: u64) -> u64 {
 }
 
 pub fn is_epoch_boundary(slot: u64) -> bool {
-    slot % 86_400 == 0
+    slot.is_multiple_of(86_400)
 }
 
 pub fn epoch_to_slot(epoch: u64) -> u64 {

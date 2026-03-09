@@ -210,11 +210,7 @@ pub fn ed25519_secret_to_privatekey(secret_bytes: &[u8]) -> derivation::Derivati
 
     // Create pallas SecretKey
     use pallas_crypto::key::ed25519::SecretKey;
-    let secret_key = SecretKey::try_from(bytes)
-        .map_err(|e| derivation::DerivationError::DerivationFailed(format!(
-            "Failed to create SecretKey: {}",
-            e
-        )))?;
+    let secret_key = SecretKey::from(bytes);
 
     Ok(pallas_wallet::PrivateKey::Normal(secret_key))
 }

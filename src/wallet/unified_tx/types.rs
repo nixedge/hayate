@@ -49,19 +49,16 @@ pub struct ScriptInputSpec {
 
 /// Fee calculation strategy
 #[derive(Debug, Clone, Copy)]
+#[derive(Default)]
 pub enum FeeStrategy {
     /// Use fixed fee amount (lovelace)
     Fixed(u64),
 
     /// Automatic calculation from protocol parameters
+    #[default]
     Automatic,
 }
 
-impl Default for FeeStrategy {
-    fn default() -> Self {
-        FeeStrategy::Automatic
-    }
-}
 
 /// Built transaction result
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

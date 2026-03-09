@@ -4,6 +4,7 @@ use tonic::{Request, Response, Status};
 use crate::indexer::{StorageHandle, ChainTip};
 
 // Include generated proto code
+#[allow(clippy::module_inception)]
 pub mod query {
     tonic::include_proto!("utxorpc.query.v1");
 }
@@ -80,7 +81,7 @@ impl QueryService for QueryServiceImpl {
 
         // Convert addresses to hex for lookup
         let address_hexes: Vec<String> = req.addresses.iter()
-            .map(|addr| hex::encode(addr))
+            .map(hex::encode)
             .collect();
 
         // Use address index to efficiently find UTxOs
@@ -532,7 +533,7 @@ impl QueryService for QueryServiceImpl {
 
         // Convert address filters to hex for comparison
         let address_filters: Vec<String> = req.addresses.iter()
-            .map(|addr| hex::encode(addr))
+            .map(hex::encode)
             .collect();
 
         // Scan through the slot range
@@ -755,6 +756,7 @@ impl QueryService for QueryServiceImpl {
 }
 
 impl QueryServiceImpl {
+    #[allow(clippy::result_large_err)]
     fn build_created_event(&self, event_json: &serde_json::Value) -> Result<query::UtxoEvent, Status> {
         let utxo_data = event_json.get("utxo_data")
             .ok_or_else(|| Status::internal("Missing utxo_data in CREATED event"))?;
@@ -823,6 +825,7 @@ impl QueryServiceImpl {
         })
     }
 
+    #[allow(clippy::result_large_err)]
     fn build_spent_event(&self, event_json: &serde_json::Value) -> Result<query::UtxoEvent, Status> {
         let utxo_key = event_json.get("utxo_key")
             .and_then(|v| v.as_str())

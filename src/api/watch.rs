@@ -5,6 +5,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use crate::indexer::HayateIndexer;
 use std::sync::Arc;
 
+#[allow(clippy::module_inception)]
 pub mod watch {
     tonic::include_proto!("utxorpc.watch.v1");
 }
