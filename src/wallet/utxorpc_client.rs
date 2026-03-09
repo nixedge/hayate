@@ -2,6 +2,50 @@
 
 use anyhow::{Result, Context};
 use tonic::transport::Channel;
+use serde::{Deserialize, Serialize, Serializer, Deserializer};
+
+// Hex serialization helpers for Vec<u8>
+mod hex_serde {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(data: &Vec<u8>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&hex::encode(data))
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = <String>::deserialize(deserializer)?;
+        hex::decode(&s).map_err(serde::de::Error::custom)
+    }
+}
+
+mod opt_hex_serde {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(data: &Option<Vec<u8>>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match data {
+            Some(bytes) => serializer.serialize_some(&hex::encode(bytes)),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Vec<u8>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let opt = <Option<String>>::deserialize(deserializer)?;
+        opt.map(|s| hex::decode(&s).map_err(serde::de::Error::custom))
+            .transpose()
+    }
+}
 
 // Import the generated proto types
 use crate::api::query::query::{
@@ -136,18 +180,22 @@ pub struct ChainTip {
 }
 
 /// UTxO data structure
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(dead_code)]
 pub struct UtxoData {
+    #[serde(with = "hex_serde")]
     pub tx_hash: Vec<u8>,
     pub output_index: u32,
     #[allow(dead_code)]
+    #[serde(with = "hex_serde")]
     pub address: Vec<u8>,
     pub coin: u64,
     pub assets: Vec<AssetData>,
     #[allow(dead_code)]
+    #[serde(with = "opt_hex_serde", skip_serializing_if = "Option::is_none", default)]
     pub datum_hash: Option<Vec<u8>>,
     #[allow(dead_code)]
+    #[serde(with = "opt_hex_serde", skip_serializing_if = "Option::is_none", default)]
     pub datum: Option<Vec<u8>>,
 }
 
@@ -220,9 +268,11 @@ impl WalletUtxorpcClient {
 }
 
 /// Native asset data
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssetData {
+    #[serde(with = "hex_serde")]
     pub policy_id: Vec<u8>,
+    #[serde(with = "hex_serde")]
     pub asset_name: Vec<u8>,
     pub amount: u64,
 }
