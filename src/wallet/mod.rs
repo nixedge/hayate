@@ -10,6 +10,7 @@ pub mod cli;
 pub mod plutus;
 pub mod tx_builder;
 pub mod wallet;
+pub mod unified_tx;
 
 pub use storage::*;
 pub use cli::handle_wallet_command;
