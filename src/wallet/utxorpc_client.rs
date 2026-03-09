@@ -6,7 +6,7 @@ use tonic::transport::Channel;
 // Import the generated proto types
 use crate::api::query::query::{
     query_service_client::QueryServiceClient,
-    ReadUtxosRequest, GetChainTipRequest,
+    ReadUtxosRequest, GetChainTipRequest, ReadParamsRequest,
 };
 use crate::api::submit::submit::{
     submit_service_client::SubmitServiceClient,
@@ -65,6 +65,64 @@ impl WalletUtxorpcClient {
             slot: response.slot,
             hash: response.hash,
         })
+    }
+
+    /// Query current protocol parameters
+    ///
+    /// Returns the current protocol parameters from the node, which include:
+    /// - Fee calculation parameters (minFeeA, minFeeB)
+    /// - UTxO cost parameters (utxoCostPerByte)
+    /// - Plutus execution pricing (priceMemory, priceSteps)
+    /// - Execution limits and stake parameters
+    ///
+    /// Returns None if the server does not have protocol parameters available.
+    pub async fn query_protocol_params(&mut self) -> Result<Option<crate::protocol_params::ProtocolParameters>> {
+        let request = ReadParamsRequest {};
+
+        let response = self.client.read_params(request)
+            .await
+            .context("Failed to query protocol parameters")?
+            .into_inner();
+
+        // Convert proto protocol params to our ProtocolParameters struct
+        if let Some(proto_params) = response.protocol_params {
+            use crate::protocol_params::{ProtocolParameters, ExUnits, Rational};
+
+            Ok(Some(ProtocolParameters {
+                min_fee_a: proto_params.min_fee_a,
+                min_fee_b: proto_params.min_fee_b,
+                max_tx_size: proto_params.max_tx_size,
+                max_block_body_size: proto_params.max_block_body_size,
+                utxo_cost_per_byte: proto_params.utxo_cost_per_byte,
+                min_utxo_lovelace: if proto_params.min_utxo_lovelace > 0 {
+                    Some(proto_params.min_utxo_lovelace)
+                } else {
+                    None
+                },
+                price_memory: proto_params.price_memory.map(|r| Rational {
+                    numerator: r.numerator,
+                    denominator: r.denominator,
+                }),
+                price_steps: proto_params.price_steps.map(|r| Rational {
+                    numerator: r.numerator,
+                    denominator: r.denominator,
+                }),
+                max_tx_execution_units: proto_params.max_tx_execution_units.map(|u| ExUnits {
+                    mem: u.mem,
+                    steps: u.steps,
+                }),
+                max_block_execution_units: proto_params.max_block_execution_units.map(|u| ExUnits {
+                    mem: u.mem,
+                    steps: u.steps,
+                }),
+                key_deposit: proto_params.key_deposit,
+                pool_deposit: proto_params.pool_deposit,
+                min_pool_cost: proto_params.min_pool_cost,
+                epoch: proto_params.epoch,
+            }))
+        } else {
+            Ok(None)
+        }
     }
 }
 
