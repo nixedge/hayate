@@ -2,18 +2,18 @@
 //
 // Queries current protocol parameters from a Cardano node using the
 // LocalStateQuery protocol via pallas-network.
-//
-// NOTE: Currently returns network defaults. Full N2C LocalStateQuery
-// integration will be implemented in a future update.
 
-use crate::protocol_params::{ProtocolParameters, ProtocolParamError, Result};
+use crate::protocol_params::{ProtocolParameters, ExUnits, Rational, ProtocolParamError, Result};
+use pallas_network::facades::NodeClient;
+use pallas_network::miniprotocols::localstate::queries_v16::{self, Request};
+use std::path::Path;
 
 /// Protocol parameter query client
 ///
 /// Connects to a Cardano node via the N2C protocol and queries
 /// current protocol parameters using LocalStateQuery.
 pub struct ProtocolParamQuery {
-    relay: String,
+    socket_path: String,
     magic: u64,
 }
 
@@ -21,41 +21,131 @@ impl ProtocolParamQuery {
     /// Create a new protocol parameter query client
     ///
     /// # Arguments
-    /// * `relay` - Node address (e.g., "localhost:3001" or "/path/to/node.socket")
+    /// * `socket_path` - Path to the node's Unix socket
     /// * `magic` - Network magic number
-    pub fn new(relay: String, magic: u64) -> Self {
-        Self { relay, magic }
+    pub fn new(socket_path: String, magic: u64) -> Self {
+        Self { socket_path, magic }
     }
 
     /// Query current protocol parameters from the node
-    ///
-    /// TODO: Implement actual N2C LocalStateQuery protocol querying.
-    /// For now, returns network-specific defaults based on magic number.
     ///
     /// Uses LocalStateQuery to fetch the current protocol parameters
     /// from the node's ledger state.
     pub async fn query_current_params(&mut self) -> Result<ProtocolParameters> {
         tracing::info!(
             "Querying protocol parameters from node: {} (magic: {})",
-            self.relay,
+            self.socket_path,
             self.magic
         );
 
-        // TODO: Implement actual N2C query using pallas_network LocalStateQuery
-        // For now, return defaults based on network magic
-        let params = self.get_network_defaults()?;
+        // Connect to node
+        let path = Path::new(&self.socket_path);
+        let mut client = NodeClient::connect(path, self.magic)
+            .await
+            .map_err(|e| ProtocolParamError::QueryFailed(format!("Failed to connect to node: {}", e)))?;
 
-        tracing::debug!(
-            "Using protocol parameters: minFeeA={}, minFeeB={}, utxoCostPerByte={}",
-            params.min_fee_a,
-            params.min_fee_b,
-            params.utxo_cost_per_byte
-        );
+        // Acquire the tip point (required before querying)
+        let statequery = client.statequery();
+        statequery.send_acquire(None)
+            .await
+            .map_err(|e| ProtocolParamError::QueryFailed(format!("Failed to send acquire: {}", e)))?;
 
-        Ok(params)
+        // Wait for acquired confirmation
+        statequery.recv_while_acquiring()
+            .await
+            .map_err(|e| ProtocolParamError::QueryFailed(format!("Failed to acquire state: {}", e)))?;
+
+        // Get current era first
+        let era = queries_v16::get_current_era(statequery)
+            .await
+            .map_err(|e| ProtocolParamError::QueryFailed(format!("Failed to query current era: {}", e)))?;
+
+        tracing::debug!("Current era: {}", era);
+
+        // Query protocol parameters for the current era
+        let pparams = queries_v16::get_current_pparams(statequery, era)
+            .await
+            .map_err(|e| ProtocolParamError::QueryFailed(format!("Failed to query protocol params: {}", e)))?;
+
+        // Query epoch number
+        let epoch = queries_v16::get_block_epoch_number(statequery, era)
+            .await
+            .map_err(|e| ProtocolParamError::QueryFailed(format!("Failed to query epoch: {}", e)))?;
+
+        tracing::debug!("Current epoch: {}", epoch);
+
+        // Release and disconnect
+        statequery.send_release()
+            .await
+            .ok(); // Ignore release errors
+        client.abort().await;
+
+        // Parse the response
+        tracing::debug!("Received {} protocol parameters from node", pparams.len());
+        self.parse_protocol_params(pparams, epoch as u64)
     }
 
-    /// Get protocol parameter defaults based on network magic
+    /// Parse pallas protocol parameters into our ProtocolParameters struct
+    fn parse_protocol_params(&self, pparams: Vec<queries_v16::ProtocolParam>, epoch: u64) -> Result<ProtocolParameters> {
+        // The vector typically contains one ProtocolParam with all fields
+        let param = pparams.first()
+            .ok_or_else(|| ProtocolParamError::QueryFailed("No protocol parameters returned".to_string()))?;
+
+        // Extract values with defaults (converting AnyUInt to u64)
+        let min_fee_a = param.minfee_a.unwrap_or(44) as u64;
+        let min_fee_b = param.minfee_b.unwrap_or(155_381) as u64;
+        let max_tx_size = param.max_transaction_size.unwrap_or(16_384) as u64;
+        let max_block_body_size = param.max_block_body_size.unwrap_or(90_112) as u64;
+        let utxo_cost_per_byte: u64 = param.ada_per_utxo_byte.map(|v| v.into()).unwrap_or(4_310);
+        let key_deposit: u64 = param.key_deposit.map(|v| v.into()).unwrap_or(2_000_000);
+        let pool_deposit: u64 = param.pool_deposit.map(|v| v.into()).unwrap_or(500_000_000);
+        let min_pool_cost: u64 = param.min_pool_cost.map(|v| v.into()).unwrap_or(340_000_000);
+
+        // Parse execution costs (RationalNumber already has numerator/denominator)
+        let (price_memory, price_steps) = if let Some(ref exec_costs) = param.execution_costs {
+            let mem = Some(Rational {
+                numerator: exec_costs.mem_price.numerator,
+                denominator: exec_costs.mem_price.denominator,
+            });
+            let steps = Some(Rational {
+                numerator: exec_costs.step_price.numerator,
+                denominator: exec_costs.step_price.denominator,
+            });
+            (mem, steps)
+        } else {
+            (None, None)
+        };
+
+        // Parse execution units (convert u32 to u64)
+        let max_tx_execution_units = param.max_tx_ex_units.as_ref().map(|units| ExUnits {
+            mem: units.mem as u64,
+            steps: units.steps as u64,
+        });
+
+        let max_block_execution_units = param.max_block_ex_units.as_ref().map(|units| ExUnits {
+            mem: units.mem as u64,
+            steps: units.steps as u64,
+        });
+
+        Ok(ProtocolParameters {
+            min_fee_a,
+            min_fee_b,
+            max_tx_size,
+            max_block_body_size,
+            utxo_cost_per_byte,
+            min_utxo_lovelace: None, // Legacy, not in modern params
+            price_memory,
+            price_steps,
+            max_tx_execution_units,
+            max_block_execution_units,
+            key_deposit,
+            pool_deposit,
+            min_pool_cost,
+            epoch,
+        })
+    }
+
+    /// Get protocol parameter defaults based on network magic (fallback)
     fn get_network_defaults(&self) -> Result<ProtocolParameters> {
         // Network magic numbers from config.rs
         match self.magic {
