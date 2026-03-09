@@ -11,12 +11,6 @@
     rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
     treefmt-nix.url = "github:numtide/treefmt-nix";
     treefmt-nix.inputs.nixpkgs.follows = "nixpkgs";
-
-    # Local cardano-lsm dependency
-    cardano-lsm = {
-      url = "github:disassembler/cardano-lsm-rust";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
   };
 
   outputs = {
