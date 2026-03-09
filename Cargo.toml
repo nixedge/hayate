@@ -19,7 +19,7 @@ path = "src/node/main.rs"
 
 [dependencies]
 # LSM storage engine
-cardano-lsm = { git = "https://github.com/nixedge/cardano-lsm-rust" }
+cardano-lsm = "1.0.0"
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }

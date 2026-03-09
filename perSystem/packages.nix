@@ -44,13 +44,6 @@
         installShellFiles
       ];
 
-      # Link cardano-lsm from flake input as a path dependency
-      preConfigure = ''
-        mkdir -p ../cardano-lsm-rust
-        cp -r ${inputs.cardano-lsm}/* ../cardano-lsm-rust/
-        chmod -R +w ../cardano-lsm-rust
-      '';
-
       meta = {
         description = "Hayate (疾風) - Swift Cardano full node indexer";
         license = lib.licenses.asl20;
