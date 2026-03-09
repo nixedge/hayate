@@ -5,6 +5,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use crate::indexer::HayateIndexer;
 use std::sync::Arc;
 
+#[allow(clippy::module_inception)]
 pub mod submit {
     tonic::include_proto!("utxorpc.submit.v1");
 }

@@ -346,7 +346,7 @@ async fn handle_rollback_command(
 
     // Parse network
     let network = if let Some(net_str) = network_str {
-        Network::from_str(&net_str)
+        Network::parse(&net_str)
             .ok_or_else(|| anyhow::anyhow!("Invalid network: {}", net_str))?
     } else {
         Network::Preview // Default
@@ -479,7 +479,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let network = if let Some(network_str) = &args.network {
-        Network::from_str(network_str)
+        Network::parse(network_str)
             .ok_or_else(|| anyhow::anyhow!("Invalid network: {}", network_str))?
     } else if socket.is_some() {
         return Err(anyhow::anyhow!("--network is required when using --socket"));
@@ -487,7 +487,7 @@ async fn main() -> anyhow::Result<()> {
         // From config file - use first enabled network
         config.networks.iter()
             .find(|(_, cfg)| cfg.enabled)
-            .and_then(|(name, _)| Network::from_str(name))
+            .and_then(|(name, _)| Network::parse(name))
             .ok_or_else(|| anyhow::anyhow!("No network enabled in config"))?
     };
 

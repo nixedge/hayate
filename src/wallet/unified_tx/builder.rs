@@ -200,10 +200,10 @@ impl UnifiedTxBuilder {
     /// ```
     pub fn with_utxos_from_file(&mut self, path: &str) -> Result<&mut Self> {
         let json = std::fs::read_to_string(path)
-            .map_err(|e| UnifiedTxError::NoUtxos)?;
+            .map_err(|_e| UnifiedTxError::NoUtxos)?;
 
         let utxos: Vec<UtxoData> = serde_json::from_str(&json)
-            .map_err(|e| UnifiedTxError::NoUtxos)?;
+            .map_err(|_e| UnifiedTxError::NoUtxos)?;
 
         self.available_utxos = Some(utxos);
         Ok(self)
@@ -944,7 +944,7 @@ impl UnifiedTxBuilder {
     ///
     /// # Returns
     /// Signed transaction CBOR bytes ready for submission
-    pub async fn sign_transaction(built_tx: &BuiltTransaction, wallet: Arc<Wallet>) -> Result<Vec<u8>> {
+    pub async fn sign_transaction(_built_tx: &BuiltTransaction, _wallet: Arc<Wallet>) -> Result<Vec<u8>> {
         tracing::info!("Signing pre-built transaction on air-gapped machine");
 
         // For airgap signing, we need to rebuild the transaction with the same parameters

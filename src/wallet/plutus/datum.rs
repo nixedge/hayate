@@ -124,7 +124,7 @@ impl VersionedMultisig {
 
         // Sort members by cardano_hash for deterministic encoding
         let mut sorted_members = self.members.clone();
-        sorted_members.sort_by(|a, b| a.cardano_hash.cmp(&b.cardano_hash));
+        sorted_members.sort_by_key(|a| a.cardano_hash);
 
         for member in sorted_members {
             // Key: cardano_hash (28 bytes)

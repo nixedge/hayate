@@ -183,7 +183,7 @@ pub fn parse_account_xpub(xpub_str: &str) -> Result<XPub> {
         let data_fe32 = checked.byte_iter();
 
         for fe in data_fe32 {
-            bytes.push(u8::from(fe));
+            bytes.push(fe);
         }
 
         bytes
@@ -212,8 +212,7 @@ pub fn derive_account_keys(account_xpub: XPub, gap_limit: u32) -> Result<WalletA
     let stake_xpub = stake_chain_xpub.derive(ed25519_bip32::DerivationScheme::V2, 0)?;
 
     let stake_pubkey_bytes = stake_xpub.public_key();
-    let stake_pubkey = PublicKey::from(<[u8; 32]>::try_from(stake_pubkey_bytes)
-        .context("Invalid stake public key length")?);
+    let stake_pubkey = PublicKey::from(stake_pubkey_bytes);
     let stake_key_hash = stake_pubkey.compute_hash();
 
     // Derive payment keys: account'/0/0..gap_limit
@@ -223,8 +222,7 @@ pub fn derive_account_keys(account_xpub: XPub, gap_limit: u32) -> Result<WalletA
     for index in 0..gap_limit {
         let payment_xpub = payment_chain_xpub.derive(ed25519_bip32::DerivationScheme::V2, index)?;
         let payment_pubkey_bytes = payment_xpub.public_key();
-        let payment_pubkey = PublicKey::from(<[u8; 32]>::try_from(payment_pubkey_bytes)
-            .context("Invalid payment public key length")?);
+        let payment_pubkey = PublicKey::from(payment_pubkey_bytes);
         let payment_key_hash = payment_pubkey.compute_hash();
 
         payment_keys.push((payment_pubkey, payment_key_hash));

@@ -74,7 +74,7 @@ use pallas_txbuilder::{BuildConway, Input, Output, ScriptKind, StagingTransactio
 pub struct PlutusTransactionBuilder {
     network: Network,
     staging_tx: StagingTransaction,
-    change_address: Vec<u8>,
+    _change_address: Vec<u8>,
 }
 
 impl PlutusTransactionBuilder {
@@ -83,7 +83,7 @@ impl PlutusTransactionBuilder {
         Self {
             network,
             staging_tx: StagingTransaction::new(),
-            change_address,
+            _change_address: change_address,
         }
     }
 

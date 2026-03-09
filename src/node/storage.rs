@@ -394,7 +394,7 @@ pub fn is_epoch_boundary(slot: u64, network: &Network) -> bool {
         Network::SanchoNet => 86_400,
         Network::Custom(_) => 432_000,
     };
-    (slot + 1) % epoch_length == 0
+    (slot + 1).is_multiple_of(epoch_length)
 }
 
 pub fn epoch_to_slot(epoch: u64, network: &Network) -> u64 {

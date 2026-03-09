@@ -349,6 +349,7 @@ impl SecondaryEntry {
     /// - checksum: u32 BE (4 bytes) - CRC32 of block
     /// - header_hash: [u8; 32] (32 bytes) - Blake2b-256 hash
     /// - block_no: u64 BE (8 bytes) - block number in chain
+    ///
     /// Total: 56 bytes (0x38)
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         if bytes.len() < 56 {

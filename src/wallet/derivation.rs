@@ -138,9 +138,9 @@ pub fn derive_payment_address(
         ShelleyDelegationPart::Key(stake_hash),
     );
 
-    Ok(Address::Shelley(addr).to_bech32().map_err(|e| {
+    Address::Shelley(addr).to_bech32().map_err(|e| {
         DerivationError::AddressGenerationFailed(format!("Failed to encode address: {}", e))
-    })?)
+    })
 }
 
 /// Derive stake address for an account
@@ -158,9 +158,9 @@ pub fn derive_stake_address(
         ShelleyDelegationPart::Null,
     );
 
-    Ok(Address::Shelley(addr).to_bech32().map_err(|e| {
+    Address::Shelley(addr).to_bech32().map_err(|e| {
         DerivationError::AddressGenerationFailed(format!("Failed to encode stake address: {}", e))
-    })?)
+    })
 }
 
 /// Derive enterprise address (payment only, no staking)
@@ -184,9 +184,9 @@ pub fn derive_enterprise_address(
         ShelleyDelegationPart::Null, // Enterprise address has no stake component
     );
 
-    Ok(Address::Shelley(addr).to_bech32().map_err(|e| {
+    Address::Shelley(addr).to_bech32().map_err(|e| {
         DerivationError::AddressGenerationFailed(format!("Failed to encode address: {}", e))
-    })?)
+    })
 }
 
 /// Blake2b-224 hash function

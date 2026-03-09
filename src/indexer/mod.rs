@@ -18,6 +18,9 @@ pub use storage_manager::{StorageHandle, StorageManager};
 // Import RewardsTracker from the rewards module
 use crate::rewards::RewardsTracker;
 
+/// Type alias for block metadata: (slot, timestamp, prev_hash)
+type BlockMetadata = (u64, u64, Option<Vec<u8>>);
+
 /// Block update broadcast to subscribers
 #[derive(Debug, Clone)]
 pub struct BlockUpdate {
@@ -69,7 +72,7 @@ impl Network {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "mainnet" => Some(Network::Mainnet),
             "preprod" => Some(Network::Preprod),
@@ -443,7 +446,7 @@ impl NetworkStorage {
     }
 
     /// Get block metadata by hash - returns (slot, timestamp, prev_hash)
-    pub fn get_block_metadata(&self, block_hash: &[u8]) -> Result<Option<(u64, u64, Option<Vec<u8>>)>> {
+    pub fn get_block_metadata(&self, block_hash: &[u8]) -> Result<Option<BlockMetadata>> {
         if let Some(value) = self.block_hash_index.get(&Key::from(block_hash))? {
             let metadata: serde_json::Value = serde_json::from_slice(value.as_ref())?;
             let slot = metadata["slot"].as_u64().unwrap_or(0);
@@ -471,7 +474,7 @@ impl NetworkStorage {
         let key = Key::from(index_key.as_bytes());
 
         // Store a marker (just 1 byte) - the key itself contains the information
-        self.address_utxo_index.insert(&key, &Value::from(&[1u8]))?;
+        self.address_utxo_index.insert(&key, &Value::from([1u8]))?;
 
         Ok(())
     }
@@ -516,7 +519,7 @@ impl NetworkStorage {
         let key = Key::from(index_key.as_bytes());
 
         // Store a marker (just 1 byte)
-        self.address_tx_index.insert(&key, &Value::from(&[1u8]))?;
+        self.address_tx_index.insert(&key, &Value::from([1u8]))?;
 
         Ok(())
     }
@@ -548,7 +551,7 @@ impl NetworkStorage {
         let key = Key::from(index_key.as_bytes());
 
         // Store a marker (just 1 byte)
-        self.policy_tx_index.insert(&key, &Value::from(&[1u8]))?;
+        self.policy_tx_index.insert(&key, &Value::from([1u8]))?;
 
         Ok(())
     }
@@ -578,7 +581,7 @@ impl NetworkStorage {
         let key = Key::from(index_key.as_bytes());
 
         // Store a marker (just 1 byte)
-        self.asset_tx_index.insert(&key, &Value::from(&[1u8]))?;
+        self.asset_tx_index.insert(&key, &Value::from([1u8]))?;
 
         Ok(())
     }
@@ -660,7 +663,7 @@ impl NetworkStorage {
                     // Count how many were deleted by checking directory
                     if let Ok(snapshots_dir) = std::fs::read_dir(tree_path.join("snapshots")) {
                         let remaining = snapshots_dir.filter(|e| e.is_ok()).count();
-                        let deleted = if remaining < keep { 0 } else { remaining - keep };
+                        let deleted = remaining.saturating_sub(keep);
                         if deleted > 0 {
                             total_cleaned += deleted;
                             tracing::debug!("Cleaned {} old snapshot(s) from {}", deleted, tree_name);

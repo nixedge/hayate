@@ -18,8 +18,8 @@ name = "hayate-node"
 path = "src/node/main.rs"
 
 [dependencies]
-# LSM storage engine (local path)
-cardano-lsm = { path = "../cardano-lsm-rust" }
+# LSM storage engine
+cardano-lsm = { git = "https://github.com/nixedge/cardano-lsm-rust" }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }

@@ -9,6 +9,7 @@ pub mod utxorpc_client;
 pub mod cli;
 pub mod plutus;
 pub mod tx_builder;
+#[allow(clippy::module_inception)]
 pub mod wallet;
 pub mod unified_tx;
 

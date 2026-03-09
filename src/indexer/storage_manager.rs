@@ -6,6 +6,12 @@ use anyhow::Result;
 use cardano_lsm::{Key, Value};
 use tokio::sync::{mpsc, oneshot};
 
+/// Type alias for block metadata: (slot, block_number, cbor_header)
+type BlockMetadata = (u64, u64, Option<Vec<u8>>);
+
+/// Type alias for key-value pairs
+type KeyValuePairs = Vec<(String, Vec<u8>)>;
+
 /// Commands that can be sent to the storage manager
 pub enum StorageCommand {
     /// Store chain tip
@@ -179,7 +185,7 @@ pub enum StorageCommand {
     /// Get block metadata
     GetBlockMetadata {
         block_hash: Vec<u8>,
-        response: oneshot::Sender<Result<Option<(u64, u64, Option<Vec<u8>>)>>>,
+        response: oneshot::Sender<Result<Option<BlockMetadata>>>,
     },
 
     /// Delete block metadata
@@ -191,7 +197,7 @@ pub enum StorageCommand {
     /// Scan block events by prefix (for range queries)
     ScanBlockEventsByPrefix {
         prefix: String,
-        response: oneshot::Sender<Result<Vec<(String, Vec<u8>)>>>,
+        response: oneshot::Sender<Result<KeyValuePairs>>,
     },
 
     /// Get the entire NetworkStorage (for BlockProcessor)

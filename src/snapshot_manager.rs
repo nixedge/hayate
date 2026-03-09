@@ -53,10 +53,6 @@ impl SnapshotManager {
         }
     }
 
-    /// Create with default settings (100 blocks, 5 min at tip, 10 min bulk, keep 10)
-    pub fn default() -> Self {
-        Self::new(100, 300, 600, 10)
-    }
 
     /// Determine if a snapshot should be taken
     ///
@@ -244,6 +240,13 @@ impl SnapshotManager {
 
         tracing::info!("Restored snapshot {} (slot {})", snapshot_name, slot);
         Ok(slot)
+    }
+}
+
+impl Default for SnapshotManager {
+    /// Create with default settings (100 blocks, 5 min at tip, 10 min bulk, keep 10)
+    fn default() -> Self {
+        Self::new(100, 300, 600, 10)
     }
 }
 

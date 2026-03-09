@@ -2,7 +2,7 @@
 
 use anyhow::{Result, Context};
 use tonic::transport::Channel;
-use serde::{Deserialize, Serialize, Serializer, Deserializer};
+use serde::{Deserialize, Serialize};
 
 // Hex serialization helpers for Vec<u8>
 mod hex_serde {

@@ -55,7 +55,7 @@ async fn main() -> Result<()> {
     info!("疾風ノード Hayate-Node starting...");
 
     // Parse network
-    let network = Network::from_str(&args.network)
+    let network = Network::parse(&args.network)
         .ok_or_else(|| anyhow::anyhow!("Invalid network: {}", args.network))?;
 
     info!("Network: {}", network.as_str());

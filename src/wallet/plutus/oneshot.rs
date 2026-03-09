@@ -5,7 +5,7 @@
 // specific UTxO must be consumed, ensuring the NFT can only be minted once.
 
 use crate::wallet::plutus::{PlutusError, PlutusResult};
-use pallas_codec::minicbor::{self, Encoder};
+use pallas_codec::minicbor::Encoder;
 use pallas_crypto::hash::{Hash, Hasher};
 
 /// One-shot minting policy parameters

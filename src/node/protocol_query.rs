@@ -5,7 +5,7 @@
 
 use crate::protocol_params::{ProtocolParameters, ExUnits, Rational, ProtocolParamError, Result};
 use pallas_network::facades::NodeClient;
-use pallas_network::miniprotocols::localstate::queries_v16::{self, Request};
+use pallas_network::miniprotocols::localstate::queries_v16::{self};
 use std::path::Path;
 
 /// Protocol parameter query client
@@ -119,12 +119,12 @@ impl ProtocolParamQuery {
         // Parse execution units (convert u32 to u64)
         let max_tx_execution_units = param.max_tx_ex_units.as_ref().map(|units| ExUnits {
             mem: units.mem as u64,
-            steps: units.steps as u64,
+            steps: units.steps,
         });
 
         let max_block_execution_units = param.max_block_ex_units.as_ref().map(|units| ExUnits {
             mem: units.mem as u64,
-            steps: units.steps as u64,
+            steps: units.steps,
         });
 
         Ok(ProtocolParameters {
@@ -145,23 +145,6 @@ impl ProtocolParamQuery {
         })
     }
 
-    /// Get protocol parameter defaults based on network magic (fallback)
-    fn get_network_defaults(&self) -> Result<ProtocolParameters> {
-        // Network magic numbers from config.rs
-        match self.magic {
-            764824073 => Ok(ProtocolParameters::mainnet_defaults()),
-            1 => Ok(ProtocolParameters::preprod_defaults()),
-            2 => Ok(ProtocolParameters::preview_defaults()),
-            4 => Ok(ProtocolParameters::sanchonet_defaults()),
-            _ => {
-                tracing::warn!(
-                    "Unknown network magic {}, using mainnet defaults",
-                    self.magic
-                );
-                Ok(ProtocolParameters::mainnet_defaults())
-            }
-        }
-    }
 }
 
 #[cfg(test)]

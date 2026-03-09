@@ -1,7 +1,6 @@
 // Types for Plutus transaction building
 
 use crate::wallet::plutus::{DatumOption, PlutusScript, Redeemer};
-use crate::wallet::tx_builder::{TxBuilderError, TxBuilderResult};
 use crate::wallet::utxorpc_client::{AssetData, UtxoData};
 
 /// Input for a Plutus transaction
