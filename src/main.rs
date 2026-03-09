@@ -231,6 +231,81 @@ async fn handle_wallet_command(wallet_cmd: &cli::WalletCommand, args: &Args) -> 
     wallet::handle_wallet_command(wallet_cmd, wallet_dir, utxorpc_endpoint).await
 }
 
+async fn handle_query_command(query_cmd: &cli::QueryCommand) -> anyhow::Result<()> {
+    match query_cmd {
+        cli::QueryCommand::ProtocolParams { socket, magic, output, json } => {
+            info!("Querying protocol parameters from node...");
+            info!("  Socket: {}", socket);
+            info!("  Magic:  {}", magic);
+
+            // Query protocol parameters using N2C
+            use node::ProtocolParamQuery;
+            let mut query = ProtocolParamQuery::new(socket.clone(), *magic);
+            let params = query.query_current_params().await?;
+
+            // Format output
+            if *json {
+                let json_output = serde_json::to_string_pretty(&params)?;
+
+                if let Some(output_path) = output {
+                    std::fs::write(output_path, &json_output)?;
+                    info!("✅ Protocol parameters saved to: {}", output_path);
+                } else {
+                    println!("{}", json_output);
+                }
+            } else {
+                // Human-readable format
+                let output_text = format!(
+                    r#"Protocol Parameters (Epoch {})
+
+Fee Parameters:
+  min_fee_a (linear):        {}
+  min_fee_b (constant):      {} lovelace
+  max_tx_size:               {} bytes
+  max_block_body_size:       {} bytes
+
+UTxO Parameters:
+  utxo_cost_per_byte:        {} lovelace/byte
+
+Stake Parameters:
+  key_deposit:               {} lovelace ({} ADA)
+  pool_deposit:              {} lovelace ({} ADA)
+  min_pool_cost:             {} lovelace ({} ADA)
+
+Plutus Parameters:
+  price_memory:              {}
+  price_steps:               {}
+  max_tx_execution_units:    {:?}
+  max_block_execution_units: {:?}
+"#,
+                    params.epoch,
+                    params.min_fee_a,
+                    params.min_fee_b,
+                    params.max_tx_size,
+                    params.max_block_body_size,
+                    params.utxo_cost_per_byte,
+                    params.key_deposit, params.key_deposit / 1_000_000,
+                    params.pool_deposit, params.pool_deposit / 1_000_000,
+                    params.min_pool_cost, params.min_pool_cost / 1_000_000,
+                    params.price_memory.as_ref().map(|r| format!("{}/{}", r.numerator, r.denominator)).unwrap_or_else(|| "N/A".to_string()),
+                    params.price_steps.as_ref().map(|r| format!("{}/{}", r.numerator, r.denominator)).unwrap_or_else(|| "N/A".to_string()),
+                    params.max_tx_execution_units,
+                    params.max_block_execution_units,
+                );
+
+                if let Some(output_path) = output {
+                    std::fs::write(output_path, &output_text)?;
+                    info!("✅ Protocol parameters saved to: {}", output_path);
+                } else {
+                    println!("{}", output_text);
+                }
+            }
+
+            Ok(())
+        }
+    }
+}
+
 async fn handle_config_command(config_cmd: &cli::ConfigCommand) -> anyhow::Result<()> {
     match config_cmd {
         cli::ConfigCommand::Generate { output } => {
@@ -346,6 +421,9 @@ async fn main() -> anyhow::Result<()> {
     match &args.command {
         Some(cli::Command::Wallet { wallet_cmd }) => {
             return handle_wallet_command(wallet_cmd, &args).await;
+        }
+        Some(cli::Command::Query { query_cmd }) => {
+            return handle_query_command(query_cmd).await;
         }
         Some(cli::Command::Config { config_cmd }) => {
             return handle_config_command(config_cmd).await;

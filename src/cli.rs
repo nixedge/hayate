@@ -49,6 +49,12 @@ pub enum Command {
         wallet_cmd: WalletCommand,
     },
 
+    /// Query blockchain data
+    Query {
+        #[command(subcommand)]
+        query_cmd: QueryCommand,
+    },
+
     /// Configuration commands
     Config {
         #[command(subcommand)]
@@ -388,6 +394,28 @@ pub enum WalletCommand {
         /// Hash the message before signing
         #[arg(long)]
         hashed: bool,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum QueryCommand {
+    /// Query current protocol parameters
+    ProtocolParams {
+        /// Node socket path (required for querying)
+        #[arg(short, long)]
+        socket: String,
+
+        /// Network magic number (1=preprod, 2=preview, 4=sanchonet, 764824073=mainnet)
+        #[arg(short, long)]
+        magic: u64,
+
+        /// Output file path (stdout if not specified)
+        #[arg(short, long)]
+        output: Option<String>,
+
+        /// Format output as JSON
+        #[arg(long, default_value = "true")]
+        json: bool,
     },
 }
 
