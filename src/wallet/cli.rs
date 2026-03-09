@@ -61,12 +61,12 @@ pub async fn handle_wallet_command(
         }
 
         // Transaction commands
-        WalletCommand::SendTx { wallet, account, address, amount, fee, out_file, multiasset, ttl, sign } => {
-            handle_send_tx(&storage, wallet, *account, address, *amount, *fee, out_file, *multiasset, *ttl, *sign, utxorpc_endpoint.as_deref()).await?;
+        WalletCommand::SendTx { wallet, account, address, amount, fee, socket, magic, out_file, multiasset, ttl, sign } => {
+            handle_send_tx(&storage, wallet, *account, address, *amount, *fee, socket.as_deref(), *magic, out_file, *multiasset, *ttl, *sign, utxorpc_endpoint.as_deref()).await?;
         }
 
-        WalletCommand::DrainTx { wallet, account, address, fee, out_file, multiasset, rewards, ttl, sign } => {
-            handle_drain_tx(&storage, wallet, *account, address, *fee, out_file, *multiasset, *rewards, *ttl, *sign, utxorpc_endpoint.as_deref()).await?;
+        WalletCommand::DrainTx { wallet, account, address, fee, socket, magic, out_file, multiasset, rewards, ttl, sign } => {
+            handle_drain_tx(&storage, wallet, *account, address, *fee, socket.as_deref(), *magic, out_file, *multiasset, *rewards, *ttl, *sign, utxorpc_endpoint.as_deref()).await?;
         }
 
         WalletCommand::StakeRegistrationTx { wallet, account, fee, out_file, deposit, ttl, sign } => {
@@ -357,7 +357,9 @@ async fn handle_send_tx(
     account: u32,
     address: &str,
     amount: u64,
-    fee: u64,
+    fee: Option<u64>,
+    socket: Option<&str>,
+    magic: Option<u64>,
     out_file: &str,
     _multiasset: bool,
     ttl: Option<u64>,
@@ -380,6 +382,39 @@ async fn handle_send_tx(
     let recipient_addr = Address::from_bech32(address)
         .context("Invalid recipient address")?;
     let recipient_bytes = recipient_addr.to_vec();
+
+    // Calculate fee if not provided
+    let fee = match fee {
+        Some(f) => {
+            println!("📊 Using provided fee: {} lovelace", f);
+            f
+        }
+        None => {
+            println!("📊 Calculating fee automatically...");
+
+            // Require socket and magic for automatic fee calculation
+            let socket_path = socket.context("--socket required for automatic fee calculation")?;
+            let network_magic = magic.context("--magic required for automatic fee calculation")?;
+
+            // Query protocol parameters
+            use crate::node::ProtocolParamQuery;
+            let mut query = ProtocolParamQuery::new(socket_path.to_string(), network_magic);
+            let params = query.query_current_params().await
+                .context("Failed to query protocol parameters")?;
+
+            // Estimate transaction size (rough estimate)
+            // A simple send transaction is approximately 300-400 bytes
+            let estimated_tx_size = 350u64;
+            let calculated_fee = params.calculate_min_fee(estimated_tx_size);
+
+            println!("   Estimated tx size: {} bytes", estimated_tx_size);
+            println!("   Calculated fee:    {} lovelace ({:.3} ADA)",
+                calculated_fee, calculated_fee as f64 / 1_000_000.0);
+            println!("   (minFeeA={}, minFeeB={})", params.min_fee_a, params.min_fee_b);
+
+            calculated_fee
+        }
+    };
 
     // Load wallet metadata and derive account
     let metadata = storage.load_metadata(wallet)
@@ -460,7 +495,9 @@ async fn handle_drain_tx(
     wallet: &str,
     account: u32,
     address: &str,
-    fee: u64,
+    fee: Option<u64>,
+    socket: Option<&str>,
+    magic: Option<u64>,
     out_file: &str,
     _multiasset: bool,
     _rewards: bool,
@@ -484,6 +521,38 @@ async fn handle_drain_tx(
     let recipient_addr = Address::from_bech32(address)
         .context("Invalid recipient address")?;
     let recipient_bytes = recipient_addr.to_vec();
+
+    // Calculate fee if not provided
+    let fee = match fee {
+        Some(f) => {
+            println!("📊 Using provided fee: {} lovelace", f);
+            f
+        }
+        None => {
+            println!("📊 Calculating fee automatically...");
+
+            // Require socket and magic for automatic fee calculation
+            let socket_path = socket.context("--socket required for automatic fee calculation")?;
+            let network_magic = magic.context("--magic required for automatic fee calculation")?;
+
+            // Query protocol parameters
+            use crate::node::ProtocolParamQuery;
+            let mut query = ProtocolParamQuery::new(socket_path.to_string(), network_magic);
+            let params = query.query_current_params().await
+                .context("Failed to query protocol parameters")?;
+
+            // Estimate transaction size (drain tx is similar to send tx)
+            let estimated_tx_size = 350u64;
+            let calculated_fee = params.calculate_min_fee(estimated_tx_size);
+
+            println!("   Estimated tx size: {} bytes", estimated_tx_size);
+            println!("   Calculated fee:    {} lovelace ({:.3} ADA)",
+                calculated_fee, calculated_fee as f64 / 1_000_000.0);
+            println!("   (minFeeA={}, minFeeB={})", params.min_fee_a, params.min_fee_b);
+
+            calculated_fee
+        }
+    };
 
     // Load wallet metadata and derive account
     let metadata = storage.load_metadata(wallet)

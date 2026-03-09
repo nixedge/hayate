@@ -201,9 +201,17 @@ pub enum WalletCommand {
         #[arg(long)]
         amount: u64,
 
-        /// Transaction fee in lovelace
+        /// Transaction fee in lovelace (optional - will be calculated automatically if not provided)
         #[arg(long)]
-        fee: u64,
+        fee: Option<u64>,
+
+        /// Node socket path (required for automatic fee calculation)
+        #[arg(long)]
+        socket: Option<String>,
+
+        /// Network magic number (required for automatic fee calculation)
+        #[arg(long)]
+        magic: Option<u64>,
 
         /// Output file for transaction
         #[arg(long)]
@@ -236,9 +244,17 @@ pub enum WalletCommand {
         #[arg(long)]
         address: String,
 
-        /// Transaction fee in lovelace
+        /// Transaction fee in lovelace (optional - will be calculated automatically if not provided)
         #[arg(long)]
-        fee: u64,
+        fee: Option<u64>,
+
+        /// Node socket path (required for automatic fee calculation)
+        #[arg(long)]
+        socket: Option<String>,
+
+        /// Network magic number (required for automatic fee calculation)
+        #[arg(long)]
+        magic: Option<u64>,
 
         /// Output file for transaction
         #[arg(long)]
