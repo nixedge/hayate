@@ -14,6 +14,7 @@ pub mod api;
 pub mod config;
 pub mod storage;
 pub mod node;  // Full node with ledger state snapshots
+pub mod protocol_params;  // Protocol parameter querying and management
 
 pub use indexer::{HayateIndexer, Network, NetworkStorage, ChainTip, BlockProcessor, BlockStats};
 pub use config::HayateConfig;
