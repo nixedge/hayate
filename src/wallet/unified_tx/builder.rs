@@ -32,7 +32,7 @@ use std::collections::BTreeMap;
 /// ```
 pub struct UnifiedTxBuilder {
     wallet: Arc<Wallet>,
-    client: WalletUtxorpcClient,
+    client: Option<WalletUtxorpcClient>,
     network: Network,
 
     // Builder state
@@ -89,7 +89,7 @@ impl UnifiedTxBuilder {
 
         Self {
             wallet,
-            client,
+            client: Some(client),
             network,
             available_utxos: None,
             outputs: Vec::new(),
@@ -103,6 +103,110 @@ impl UnifiedTxBuilder {
             validity_start: None,
             protocol_params: None,
         }
+    }
+
+    /// Create a builder for offline transaction building
+    ///
+    /// This creates a builder without a network connection. You must provide
+    /// protocol parameters and UTxOs manually using `with_protocol_params()`
+    /// and `with_utxos()` or `with_utxos_from_file()`.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use std::sync::Arc;
+    /// # use hayate::wallet::{Wallet, Network};
+    /// # use hayate::wallet::unified_tx::UnifiedTxBuilder;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let wallet = Arc::new(Wallet::from_mnemonic_str("...", Network::Testnet, 0)?);
+    ///
+    /// let tx = UnifiedTxBuilder::offline(wallet)
+    ///     .with_protocol_params_from_file("protocol_params.json")?
+    ///     .with_utxos_from_file("utxos.json")?
+    ///     .send_ada("addr_test1...", 5_000_000)?
+    ///     .build().await?;  // Returns unsigned transaction
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn offline(wallet: Arc<Wallet>) -> Self {
+        let network = wallet.network();
+
+        Self {
+            wallet,
+            client: None,  // No client in offline mode
+            network,
+            available_utxos: None,
+            outputs: Vec::new(),
+            mints: Vec::new(),
+            script_inputs: Vec::new(),
+            collateral: None,
+            fee_strategy: FeeStrategy::default(),
+            address_scan_limit: 20,
+            change_address_index: 0,
+            ttl: None,
+            validity_start: None,
+            protocol_params: None,
+        }
+    }
+
+    /// Set protocol parameters manually
+    ///
+    /// Use this in offline mode to provide protocol parameters without querying the network.
+    pub fn with_protocol_params(&mut self, params: ProtocolParameters) -> &mut Self {
+        self.protocol_params = Some(params);
+        self
+    }
+
+    /// Load protocol parameters from a JSON file
+    ///
+    /// # Example JSON format
+    /// ```json
+    /// {
+    ///   "min_fee_a": 44,
+    ///   "min_fee_b": 155381,
+    ///   "max_tx_size": 16384,
+    ///   "max_block_body_size": 90112,
+    ///   "utxo_cost_per_byte": 4310,
+    ///   "key_deposit": 2000000,
+    ///   "pool_deposit": 500000000,
+    ///   "min_pool_cost": 340000000,
+    ///   "epoch": 450
+    /// }
+    /// ```
+    pub fn with_protocol_params_from_file(&mut self, path: &str) -> Result<&mut Self> {
+        let json = std::fs::read_to_string(path)
+            .map_err(|e| UnifiedTxError::FeeEstimationError(format!("Failed to read protocol params file: {}", e)))?;
+
+        let params: ProtocolParameters = serde_json::from_str(&json)
+            .map_err(|e| UnifiedTxError::FeeEstimationError(format!("Failed to parse protocol params JSON: {}", e)))?;
+
+        self.protocol_params = Some(params);
+        Ok(self)
+    }
+
+    /// Load UTxOs from a JSON file
+    ///
+    /// # Example JSON format
+    /// ```json
+    /// [
+    ///   {
+    ///     "tx_hash": "abcdef...",
+    ///     "output_index": 0,
+    ///     "address": "00142857...",
+    ///     "coin": 10000000,
+    ///     "assets": []
+    ///   }
+    /// ]
+    /// ```
+    pub fn with_utxos_from_file(&mut self, path: &str) -> Result<&mut Self> {
+        let json = std::fs::read_to_string(path)
+            .map_err(|e| UnifiedTxError::NoUtxos)?;
+
+        let utxos: Vec<UtxoData> = serde_json::from_str(&json)
+            .map_err(|e| UnifiedTxError::NoUtxos)?;
+
+        self.available_utxos = Some(utxos);
+        Ok(self)
     }
 
     /// Set the number of addresses to scan for UTxOs
@@ -166,6 +270,9 @@ impl UnifiedTxBuilder {
     pub async fn query_utxos(&mut self) -> Result<&mut Self> {
         use pallas_addresses::Address;
 
+        let client = self.client.as_mut()
+            .ok_or_else(|| UnifiedTxError::NoUtxos)?;
+
         let mut addresses = Vec::new();
 
         // Derive payment addresses (with stake component)
@@ -192,7 +299,7 @@ impl UnifiedTxBuilder {
         );
 
         // Query all addresses in one call
-        let utxos = self.client.query_utxos(addresses).await?;
+        let utxos = client.query_utxos(addresses).await?;
 
         tracing::info!("Found {} UTxOs", utxos.len());
 
@@ -443,18 +550,25 @@ impl UnifiedTxBuilder {
     /// Query and cache protocol parameters
     async fn query_protocol_params(&mut self) -> Result<&ProtocolParameters> {
         if self.protocol_params.is_none() {
-            let params = self.client.query_protocol_params().await?
-                .ok_or_else(|| UnifiedTxError::FeeEstimationError(
-                    "Protocol parameters not available from server".to_string()
-                ))?;
+            // Try to query from client if available
+            if let Some(ref mut client) = self.client {
+                let params = client.query_protocol_params().await?
+                    .ok_or_else(|| UnifiedTxError::FeeEstimationError(
+                        "Protocol parameters not available from server".to_string()
+                    ))?;
 
-            tracing::debug!(
-                "Cached protocol parameters: minFeeA={}, minFeeB={}",
-                params.min_fee_a,
-                params.min_fee_b
-            );
+                tracing::debug!(
+                    "Cached protocol parameters: minFeeA={}, minFeeB={}",
+                    params.min_fee_a,
+                    params.min_fee_b
+                );
 
-            self.protocol_params = Some(params);
+                self.protocol_params = Some(params);
+            } else {
+                return Err(UnifiedTxError::FeeEstimationError(
+                    "Protocol parameters not set. Use with_protocol_params() or with_protocol_params_from_file() in offline mode".to_string()
+                ));
+            }
         }
 
         Ok(self.protocol_params.as_ref().unwrap())
@@ -959,12 +1073,19 @@ impl UnifiedTxBuilder {
     /// Build, sign, and submit the transaction
     ///
     /// Returns the transaction hash.
+    ///
+    /// Note: Requires a network connection. Not available in offline mode.
     pub async fn build_sign_submit(&mut self) -> Result<Vec<u8>> {
         let signed_tx = self.build_and_sign().await?;
 
         tracing::info!("Submitting transaction ({} bytes)", signed_tx.len());
 
-        let response = self.client.submit_transaction(signed_tx).await?;
+        let client = self.client.as_mut()
+            .ok_or_else(|| UnifiedTxError::UtxorpcError(anyhow::anyhow!(
+                "Cannot submit transaction in offline mode. Use build_and_sign() instead."
+            )))?;
+
+        let response = client.submit_transaction(signed_tx).await?;
 
         tracing::info!("Transaction submitted successfully");
 
