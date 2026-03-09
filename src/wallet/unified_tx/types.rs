@@ -64,12 +64,14 @@ impl Default for FeeStrategy {
 }
 
 /// Built transaction result
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BuiltTransaction {
     /// Transaction CBOR bytes (unsigned)
+    #[serde(with = "hex_serde")]
     pub tx_bytes: Vec<u8>,
 
     /// Transaction hash
+    #[serde(with = "hex_serde")]
     pub tx_hash: Vec<u8>,
 
     /// Fee paid (lovelace)
@@ -83,6 +85,46 @@ pub struct BuiltTransaction {
 
     /// Number of outputs in the transaction
     pub output_count: usize,
+}
+
+impl BuiltTransaction {
+    /// Save unsigned transaction to a JSON file for airgap signing
+    ///
+    /// This saves all the information needed to sign the transaction later,
+    /// including the unsigned tx bytes and the inputs that were used.
+    pub fn save_to_file(&self, path: &str) -> Result<(), std::io::Error> {
+        let json = serde_json::to_string_pretty(self)?;
+        std::fs::write(path, json)
+    }
+
+    /// Load unsigned transaction from a JSON file
+    ///
+    /// Use this to load a transaction that was built on another machine
+    /// for signing on an air-gapped device.
+    pub fn load_from_file(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let json = std::fs::read_to_string(path)?;
+        Ok(serde_json::from_str(&json)?)
+    }
+}
+
+// Hex serialization helper for BuiltTransaction
+mod hex_serde {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(data: &Vec<u8>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&hex::encode(data))
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = <String>::deserialize(deserializer)?;
+        hex::decode(&s).map_err(serde::de::Error::custom)
+    }
 }
 
 /// Transaction preview for fee estimation
