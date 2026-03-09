@@ -32,6 +32,7 @@ use pallas_addresses::Address;
 /// # Ok(())
 /// # }
 /// ```
+#[derive(Clone)]
 pub struct Wallet {
     root_key: XPrv,
     account: Account,
