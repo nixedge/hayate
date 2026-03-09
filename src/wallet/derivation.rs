@@ -129,9 +129,16 @@ pub fn derive_payment_address(
     let stake_key_derived = stake_chain.derive(DerivationScheme::V2, 0);
     let stake_pub: XPub = stake_key_derived.public();
 
+    // XPub is 64 bytes: 32 bytes public key + 32 bytes chain code
+    // For address generation, we only hash the public key (first 32 bytes)
+    let payment_pub_bytes = payment_pub.as_ref();
+    let payment_key_only = &payment_pub_bytes[..32];
+    let stake_pub_bytes = stake_pub.as_ref();
+    let stake_key_only = &stake_pub_bytes[..32];
+
     // Create Shelley address
-    let payment_hash = Hash::<28>::from(blake2b_224(payment_pub.as_ref()));
-    let stake_hash = Hash::<28>::from(blake2b_224(stake_pub.as_ref()));
+    let payment_hash = Hash::<28>::from(blake2b_224(payment_key_only));
+    let stake_hash = Hash::<28>::from(blake2b_224(stake_key_only));
 
     let addr = ShelleyAddress::new(
         network.to_pallas(),
@@ -151,7 +158,12 @@ pub fn derive_stake_address(
     network: Network,
 ) -> DerivationResult<String> {
     let stake_pub: XPub = stake_key.public();
-    let stake_hash = Hash::<28>::from(blake2b_224(stake_pub.as_ref()));
+
+    // XPub is 64 bytes: 32 bytes public key + 32 bytes chain code
+    // For address generation, we only hash the public key (first 32 bytes)
+    let stake_pub_bytes = stake_pub.as_ref();
+    let stake_key_only = &stake_pub_bytes[..32];
+    let stake_hash = Hash::<28>::from(blake2b_224(stake_key_only));
 
     let addr = ShelleyAddress::new(
         network.to_pallas(),
@@ -175,8 +187,13 @@ pub fn derive_enterprise_address(
     let payment_key = payment_chain.derive(DerivationScheme::V2, address_index);
     let payment_pub: XPub = payment_key.public();
 
+    // XPub is 64 bytes: 32 bytes public key + 32 bytes chain code
+    // For address generation, we only hash the public key (first 32 bytes)
+    let payment_pub_bytes = payment_pub.as_ref();
+    let payment_key_only = &payment_pub_bytes[..32];
+
     // Create payment key hash
-    let payment_hash = Hash::<28>::from(blake2b_224(payment_pub.as_ref()));
+    let payment_hash = Hash::<28>::from(blake2b_224(payment_key_only));
 
     // Create enterprise address (payment only, no staking)
     let addr = ShelleyAddress::new(
