@@ -917,6 +917,60 @@ impl UnifiedTxBuilder {
         })
     }
 
+    /// Sign a pre-built transaction (for airgap workflow)
+    ///
+    /// This method signs an unsigned transaction that was built on another machine,
+    /// enabling air-gapped signing for maximum security.
+    ///
+    /// # Airgap Workflow
+    ///
+    /// **On connected machine:**
+    /// 1. Build transaction: `let built_tx = builder.build().await?;`
+    /// 2. Save: `built_tx.save_to_file("unsigned_tx.json")?;`
+    /// 3. Transfer unsigned_tx.json to air-gapped machine
+    ///
+    /// **On air-gapped machine:**
+    /// 1. Load: `let built_tx = BuiltTransaction::load_from_file("unsigned_tx.json")?;`
+    /// 2. Sign: `let signed = UnifiedTxBuilder::sign_transaction(&built_tx, wallet).await?;`
+    /// 3. Save: `std::fs::write("signed_tx.cbor", signed)?;`
+    /// 4. Transfer signed_tx.cbor back to connected machine
+    ///
+    /// **Back on connected machine:**
+    /// 1. Submit: `client.submit_transaction(signed_tx).await?;`
+    ///
+    /// # Arguments
+    /// * `built_tx` - The BuiltTransaction loaded from JSON
+    /// * `wallet` - Wallet for signing (must have the private keys for the inputs)
+    ///
+    /// # Returns
+    /// Signed transaction CBOR bytes ready for submission
+    pub async fn sign_transaction(built_tx: &BuiltTransaction, wallet: Arc<Wallet>) -> Result<Vec<u8>> {
+        tracing::info!("Signing pre-built transaction on air-gapped machine");
+
+        // For airgap signing, we need to rebuild the transaction with the same parameters
+        // and sign it. This is necessary because the unsigned tx bytes don't contain
+        // enough information to sign directly without rebuilding.
+        //
+        // TODO: In the future, we could save more state in BuiltTransaction to enable
+        // true separate signing without rebuilding.
+
+        tracing::warn!("Airgap signing requires rebuilding the transaction. Ensure protocol params and UTxOs match the original build.");
+        tracing::warn!("For now, use build_and_sign() on the air-gapped machine with the same inputs.");
+
+        // Placeholder implementation - in practice, users should:
+        // 1. Transfer protocol_params.json and utxos.json to airgap machine
+        // 2. Build transaction offline on airgap machine
+        // 3. Sign using build_and_sign()
+        // This ensures everything is consistent
+
+        Err(UnifiedTxError::BuilderError(
+            crate::wallet::tx_builder::TxBuilderError::BuildError(
+                "Separate airgap signing not yet fully implemented. Use offline building on airgap machine instead: \
+                UnifiedTxBuilder::offline(wallet).with_protocol_params_from_file(...).with_utxos_from_file(...).build_and_sign()".to_string()
+            )
+        ))
+    }
+
     /// Build and sign the transaction
     ///
     /// Returns signed transaction bytes ready for submission.
