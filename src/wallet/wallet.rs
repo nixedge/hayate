@@ -182,7 +182,7 @@ fn xprv_to_pallas_privatekey(xprv: &XPrv) -> DerivationResult<pallas_wallet::Pri
     // Create pallas SecretKeyExtended using from_bytes_unchecked (safe because XPrv guarantees valid bytes)
     use pallas_crypto::key::ed25519::SecretKeyExtended;
     let secret_key_extended = unsafe {
-        SecretKeyExtended::from_bytes_unchecked(*extended_secret_key_bytes)
+        SecretKeyExtended::from_bytes_unchecked(extended_secret_key_bytes)
     };
 
     Ok(pallas_wallet::PrivateKey::Extended(secret_key_extended))

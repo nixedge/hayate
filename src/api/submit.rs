@@ -3,6 +3,7 @@
 use tonic::{Request, Response, Status};
 use tokio_stream::wrappers::ReceiverStream;
 use crate::indexer::HayateIndexer;
+use crate::config::HayateConfig;
 use std::sync::Arc;
 
 #[allow(clippy::module_inception)]
@@ -19,12 +20,15 @@ use submit::{
 
 pub struct SubmitServiceImpl {
     _indexer: Arc<HayateIndexer>,
+    config: Arc<HayateConfig>,
 }
 
 impl SubmitServiceImpl {
-    #[allow(dead_code)]
-    pub fn new(indexer: Arc<HayateIndexer>) -> Self {
-        Self { _indexer: indexer }
+    pub fn new(indexer: Arc<HayateIndexer>, config: Arc<HayateConfig>) -> Self {
+        Self {
+            _indexer: indexer,
+            config,
+        }
     }
 }
 
@@ -37,17 +41,33 @@ impl SubmitService for SubmitServiceImpl {
         request: Request<SubmitTxRequest>,
     ) -> Result<Response<SubmitTxResponse>, Status> {
         let req = request.into_inner();
-        
+
         tracing::info!("Submitting transaction ({} bytes)", req.tx.len());
-        
-        // TODO: Submit to Cardano network
-        // For now, return error
-        
-        Ok(Response::new(SubmitTxResponse {
-            tx_hash: vec![],
-            accepted: false,
-            error: "Transaction submission not yet implemented".to_string(),
-        }))
+
+        // Get socket path from config
+        // Use the hardcoded socket path for now (TODO: make configurable)
+        let socket_path = "/home/sam/work/iohk/midnight-playground/.run/sanchonet/cardano-node/node.socket";
+        let magic = 4; // SanchoNet magic
+
+        // Submit to Cardano node
+        match crate::node::txsubmit::submit_tx(socket_path, magic, req.tx).await {
+            Ok(tx_hash) => {
+                tracing::info!("Transaction accepted: {}", hex::encode(&tx_hash));
+                Ok(Response::new(SubmitTxResponse {
+                    tx_hash,
+                    accepted: true,
+                    error: String::new(),
+                }))
+            }
+            Err(e) => {
+                tracing::error!("Transaction submission failed: {}", e);
+                Ok(Response::new(SubmitTxResponse {
+                    tx_hash: vec![],
+                    accepted: false,
+                    error: format!("Transaction submission failed: {}", e),
+                }))
+            }
+        }
     }
     
     async fn wait_for_tx(

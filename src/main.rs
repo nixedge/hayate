@@ -500,6 +500,9 @@ async fn main() -> anyhow::Result<()> {
     info!("UTxORPC API: {}", config.api.bind);
     info!("Gap limit: {}", config.gap_limit);
 
+    // Wrap config in Arc for sharing
+    let config = Arc::new(config);
+
     // Create indexer
     let indexer = Arc::new(HayateIndexer::new(config.data_dir.clone(), config.gap_limit)?);
 
@@ -554,12 +557,13 @@ async fn main() -> anyhow::Result<()> {
 
         // Spawn API server in background task
         let indexer_clone = Arc::clone(&indexer);
+        let config_clone = Arc::clone(&config);
         let api_bind = config.api.bind.clone();
         let socket_clone = socket_path.clone();
         let network_clone = network.clone();
         tokio::spawn(async move {
             info!("🚀 Starting UTxORPC server on {}...", api_bind);
-            if let Err(e) = api::start_utxorpc_server(indexer_clone, api_bind, network_clone, Some(socket_clone)).await {
+            if let Err(e) = api::start_utxorpc_server(indexer_clone, config_clone, api_bind, network_clone, Some(socket_clone)).await {
                 tracing::error!("API server error: {}", e);
             }
         });
@@ -584,7 +588,8 @@ async fn main() -> anyhow::Result<()> {
     }
 
     info!("🚀 Starting UTxORPC server on {}...", config.api.bind);
-    api::start_utxorpc_server(indexer, config.api.bind, network, socket_path).await?;
+    let api_bind = config.api.bind.clone();
+    api::start_utxorpc_server(indexer, config, api_bind, network, socket_path).await?;
 
     Ok(())
 }
