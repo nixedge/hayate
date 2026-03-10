@@ -18,6 +18,6 @@ pub mod unified_tx;
 
 pub use storage::*;
 pub use cli::handle_wallet_command;
-pub use wallet::Wallet;
+pub use wallet::{Wallet, ed25519_secret_to_privatekey};
 #[allow(unused_imports)]
 pub use derivation::Network;

@@ -162,7 +162,7 @@ mod tests {
 
         let addr = script.address(Network::Testnet).unwrap();
         assert_eq!(addr.len(), 29);
-        assert_eq!(addr[0], 0x71);
+        assert_eq!(addr[0], 0x70); // Testnet header byte
     }
 
     #[test]
@@ -172,7 +172,7 @@ mod tests {
 
         let addr = script.address(Network::Mainnet).unwrap();
         assert_eq!(addr.len(), 29);
-        assert_eq!(addr[0], 0x73);
+        assert_eq!(addr[0], 0x71); // Mainnet header byte
     }
 
     #[test]

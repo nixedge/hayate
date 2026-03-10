@@ -56,65 +56,63 @@ pub struct GovernanceMember {
     pub sr25519_key: [u8; 32],
 }
 
-/// VersionedMultisig datum for governance contracts
+/// VersionedMultisig datum for governance contracts (mainnet-compatible)
 ///
-/// CBOR structure:
+/// CBOR structure (matches mainnet):
 /// ```text
-/// Constructor 0 [
-///   Constructor 0 [
-///     threshold: Int,
-///     signers: Map { cardano_hash (28 bytes) -> sr25519_key (32 bytes) }
+/// [
+///   [
+///     total_signers: Int,
+///     signers: Map { [0, bytes(28)] -> bytes(32) }
 ///   ],
 ///   logic_round: Int
 /// ]
 /// ```
+///
+/// Note: The Aiken validator calculates the actual 2/3 threshold as:
+/// `(2 * total_signers + 2) / 3`
 #[derive(Debug, Clone)]
 pub struct VersionedMultisig {
-    pub threshold: u32,
+    /// Total number of signers in the multisig
+    /// Validator calculates actual 2/3 threshold: (2 * total_signers + 2) / 3
+    pub total_signers: u32,
     pub members: Vec<GovernanceMember>,
     pub logic_round: u32,
 }
 
 impl VersionedMultisig {
     /// Create a new VersionedMultisig datum
-    pub fn new(threshold: u32, members: Vec<GovernanceMember>) -> Self {
+    pub fn new(total_signers: u32, members: Vec<GovernanceMember>) -> Self {
         Self {
-            threshold,
+            total_signers,
             members,
             logic_round: 0,
         }
     }
 
-    /// Encode to CBOR bytes
+    /// Encode to CBOR bytes matching mainnet governance datum structure
+    ///
+    /// Structure: [[total_signers, signers_map], logic_round]
+    /// - No constructor tags (raw Plutus data)
+    /// - Keys in map are CBOR-wrapped as [0, bytes(28)]
+    /// - Validator calculates 2/3 threshold from total_signers
     pub fn to_cbor(&self) -> PlutusResult<Vec<u8>> {
         let mut buffer = Vec::new();
         let mut encoder = minicbor::Encoder::new(&mut buffer);
 
-        // VersionedMultisig constructor (121 = constructor tag, 0 = constructor index)
+        // Outer array: [multisig_data, logic_round]
         encoder
             .array(2)
             .map_err(|e| PlutusError::CborEncode(e.to_string()))?;
-        encoder
-            .u32(121)
-            .map_err(|e| PlutusError::CborEncode(e.to_string()))?; // Constructor tag
-        encoder
-            .array(2)
-            .map_err(|e| PlutusError::CborEncode(e.to_string()))?; // [data, logic_round]
 
-        // Multisig constructor
+        // Inner array: [total_signers, signers_map]
         encoder
             .array(2)
             .map_err(|e| PlutusError::CborEncode(e.to_string()))?;
-        encoder
-            .u32(121)
-            .map_err(|e| PlutusError::CborEncode(e.to_string()))?; // Constructor tag
-        encoder
-            .array(2)
-            .map_err(|e| PlutusError::CborEncode(e.to_string()))?; // [threshold, signers]
 
-        // Threshold
+        // Total signers
         encoder
-            .u32(self.threshold)
+            .u32(self.total_signers)
             .map_err(|e| PlutusError::CborEncode(e.to_string()))?;
 
         // Signers map
@@ -127,10 +125,25 @@ impl VersionedMultisig {
         sorted_members.sort_by_key(|a| a.cardano_hash);
 
         for member in sorted_members {
-            // Key: cardano_hash (28 bytes)
-            encoder
+            // Key: CBOR-wrapped as [0, bytes(28)] to match mainnet structure
+            // This encodes to: 8200581c<28 bytes>
+            let mut key_buffer = Vec::new();
+            let mut key_encoder = minicbor::Encoder::new(&mut key_buffer);
+            key_encoder
+                .array(2)
+                .map_err(|e| PlutusError::CborEncode(e.to_string()))?;
+            key_encoder
+                .u32(0)
+                .map_err(|e| PlutusError::CborEncode(e.to_string()))?;
+            key_encoder
                 .bytes(&member.cardano_hash)
                 .map_err(|e| PlutusError::CborEncode(e.to_string()))?;
+
+            // Encode the wrapped key as the map key (as bytes)
+            encoder
+                .bytes(&key_buffer)
+                .map_err(|e| PlutusError::CborEncode(e.to_string()))?;
+
             // Value: sr25519_key (32 bytes)
             encoder
                 .bytes(&member.sr25519_key)
@@ -143,6 +156,80 @@ impl VersionedMultisig {
             .map_err(|e| PlutusError::CborEncode(e.to_string()))?;
 
         Ok(buffer)
+    }
+
+    /// Decode VersionedMultisig from CBOR bytes
+    pub fn from_cbor(cbor: &[u8]) -> PlutusResult<Self> {
+        use minicbor::Decoder;
+
+        let mut decoder = Decoder::new(cbor);
+
+        // Outer array: [multisig_data, logic_round]
+        let outer_len = decoder.array()
+            .map_err(|e| PlutusError::CborDecode(format!("Expected outer array: {}", e)))?
+            .ok_or_else(|| PlutusError::CborDecode("Outer array length missing".to_string()))?;
+
+        if outer_len != 2 {
+            return Err(PlutusError::CborDecode(format!("Expected outer array of length 2, got {}", outer_len)));
+        }
+
+        // Inner array: [total_signers, signers_map]
+        let inner_len = decoder.array()
+            .map_err(|e| PlutusError::CborDecode(format!("Expected inner array: {}", e)))?
+            .ok_or_else(|| PlutusError::CborDecode("Inner array length missing".to_string()))?;
+
+        if inner_len != 2 {
+            return Err(PlutusError::CborDecode(format!("Expected inner array of length 2, got {}", inner_len)));
+        }
+
+        // total_signers
+        let total_signers = decoder.u32()
+            .map_err(|e| PlutusError::CborDecode(format!("Failed to decode total_signers: {}", e)))?;
+
+        // signers map
+        let map_len = decoder.map()
+            .map_err(|e| PlutusError::CborDecode(format!("Expected map: {}", e)))?
+            .ok_or_else(|| PlutusError::CborDecode("Map length missing".to_string()))?;
+
+        let mut members = Vec::new();
+        for _ in 0..map_len {
+            // Key: wrapped Cardano key hash (CBOR bytes)
+            let wrapped_key = decoder.bytes()
+                .map_err(|e| PlutusError::CborDecode(format!("Failed to decode wrapped key: {}", e)))?;
+
+            // Unwrap: skip first 4 bytes (82 00 58 1c) to get the actual hash
+            if wrapped_key.len() < 32 {
+                return Err(PlutusError::CborDecode(format!("Wrapped key too short: {}", wrapped_key.len())));
+            }
+            let cardano_hash_bytes = &wrapped_key[4..32];
+            let mut cardano_hash = [0u8; 28];
+            cardano_hash.copy_from_slice(cardano_hash_bytes);
+
+            // Value: sr25519 key (32 bytes)
+            let sr25519_bytes = decoder.bytes()
+                .map_err(|e| PlutusError::CborDecode(format!("Failed to decode sr25519 key: {}", e)))?;
+
+            if sr25519_bytes.len() != 32 {
+                return Err(PlutusError::CborDecode(format!("Invalid sr25519 key length: {}", sr25519_bytes.len())));
+            }
+            let mut sr25519_key = [0u8; 32];
+            sr25519_key.copy_from_slice(sr25519_bytes);
+
+            members.push(GovernanceMember {
+                cardano_hash,
+                sr25519_key,
+            });
+        }
+
+        // logic_round
+        let logic_round = decoder.u32()
+            .map_err(|e| PlutusError::CborDecode(format!("Failed to decode logic_round: {}", e)))?;
+
+        Ok(Self {
+            total_signers,
+            members,
+            logic_round,
+        })
     }
 
     /// Create datum hash for this VersionedMultisig
