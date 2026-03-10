@@ -166,7 +166,8 @@ impl TempKeyMintPolicy {
     /// Calculate policy ID for this script
     pub fn policy_id(&self) -> PlutusResult<[u8; 28]> {
         let script = self.to_native_script()?;
-        let hash: Hash<28> = Hasher::<224>::hash(&script);
+        // Native scripts use hash_tagged with tag 0
+        let hash: Hash<28> = Hasher::<224>::hash_tagged(&script, 0);
         let mut policy_id = [0u8; 28];
         policy_id.copy_from_slice(hash.as_ref());
         Ok(policy_id)
