@@ -176,28 +176,14 @@ impl Wallet {
 /// Convert ed25519_bip32::XPrv to pallas_wallet::PrivateKey
 #[allow(dead_code)]
 fn xprv_to_pallas_privatekey(xprv: &XPrv) -> DerivationResult<pallas_wallet::PrivateKey> {
-    // XPrv is 96 bytes total: 64 bytes extended secret key + 32 bytes chain code
-    // as_ref() returns all 96 bytes, but we only need the first 64 for signing
-    let xprv_bytes: &[u8] = xprv.as_ref();
+    // XPrv has a method to get just the 64-byte extended secret key (without chain code)
+    let extended_secret_key_bytes = xprv.extended_secret_key();
 
-    if xprv_bytes.len() != 96 {
-        return Err(derivation::DerivationError::DerivationFailed(format!(
-            "Expected 96 bytes for XPrv (64 key + 32 chain code), got {}",
-            xprv_bytes.len()
-        )));
-    }
-
-    // Extract only the first 64 bytes (the extended secret key, without chain code)
-    let mut bytes = [0u8; 64];
-    bytes.copy_from_slice(&xprv_bytes[0..64]);
-
-    // Create pallas SecretKeyExtended
+    // Create pallas SecretKeyExtended using from_bytes_unchecked (safe because XPrv guarantees valid bytes)
     use pallas_crypto::key::ed25519::SecretKeyExtended;
-    let secret_key_extended = SecretKeyExtended::try_from(bytes)
-        .map_err(|e| derivation::DerivationError::DerivationFailed(format!(
-            "Failed to create SecretKeyExtended: {}",
-            e
-        )))?;
+    let secret_key_extended = unsafe {
+        SecretKeyExtended::from_bytes_unchecked(*extended_secret_key_bytes)
+    };
 
     Ok(pallas_wallet::PrivateKey::Extended(secret_key_extended))
 }
