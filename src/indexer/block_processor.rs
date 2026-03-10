@@ -11,6 +11,7 @@ use std::collections::{HashSet, VecDeque};
 pub struct WalletFilter {
     tracked_payment_keys: HashSet<Hash<28>>,
     tracked_stake_keys: HashSet<Hash<28>>,
+    tracked_addresses: HashSet<Vec<u8>>,
 }
 
 impl Default for WalletFilter {
@@ -24,6 +25,7 @@ impl WalletFilter {
         Self {
             tracked_payment_keys: HashSet::new(),
             tracked_stake_keys: HashSet::new(),
+            tracked_addresses: HashSet::new(),
         }
     }
 
@@ -33,6 +35,10 @@ impl WalletFilter {
 
     pub fn add_stake_credential(&mut self, stake_cred: Hash<28>) {
         self.tracked_stake_keys.insert(stake_cred);
+    }
+
+    pub fn add_address(&mut self, address_bytes: Vec<u8>) {
+        self.tracked_addresses.insert(address_bytes);
     }
 
     pub fn is_our_payment_key(&self, key_hash: &Hash<28>) -> bool {
@@ -45,6 +51,11 @@ impl WalletFilter {
 
     /// Check if an address involves any of our tracked keys
     pub fn is_our_address(&self, address_bytes: &[u8]) -> bool {
+        // First check if this exact address is being tracked
+        if self.tracked_addresses.contains(address_bytes) {
+            return true;
+        }
+
         // For now, if we have no filters, track everything
         if self.tracked_payment_keys.is_empty() && self.tracked_stake_keys.is_empty() {
             return true;
@@ -164,6 +175,10 @@ impl BlockProcessor {
     pub fn add_wallet(&mut self, payment_key: Hash<28>, stake_key: Hash<28>) {
         self.filter.add_payment_key_hash(payment_key);
         self.filter.add_stake_credential(stake_key);
+    }
+
+    pub fn add_tracked_address(&mut self, address_bytes: Vec<u8>) {
+        self.filter.add_address(address_bytes);
     }
 
     /// Add a native token to track

@@ -30,6 +30,11 @@ pub struct HayateConfig {
     /// Indexes all transactions containing these tokens, regardless of wallet
     #[serde(default)]
     pub tokens: Vec<TokenConfig>,
+
+    /// Arbitrary addresses to index (bech32 format)
+    /// Useful for tracking script addresses or external addresses
+    #[serde(default)]
+    pub addresses: Vec<String>,
 }
 
 /// Configuration for tracking a native token
@@ -169,6 +174,7 @@ impl Default for HayateConfig {
             networks,
             wallets: Vec::new(),
             tokens: Vec::new(),
+            addresses: Vec::new(),
         }
     }
 }
