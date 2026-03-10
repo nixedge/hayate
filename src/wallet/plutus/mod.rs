@@ -13,6 +13,7 @@ pub mod script;
 // Re-export commonly used types
 pub use address::Network;
 pub use cost_models::default_cost_model;
+#[allow(unused_imports)]
 pub use datum::{DatumOption, GovernanceMember, VersionedMultisig};
 #[allow(unused_imports)]
 pub use redeemer::{Redeemer, RedeemerTag};
