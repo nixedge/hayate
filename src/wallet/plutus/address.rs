@@ -24,8 +24,8 @@ impl Network {
 
     pub fn to_header_byte(&self) -> u8 {
         match self {
-            Network::Testnet => 0x71, // 0b0111_0001 - script address, no stake, testnet
-            Network::Mainnet => 0x73, // 0b0111_0011 - script address, no stake, mainnet
+            Network::Testnet => 0x70, // 0b0111_0000 - script address, no stake, testnet (network bit = 0)
+            Network::Mainnet => 0x71, // 0b0111_0001 - script address, no stake, mainnet (network bit = 1)
         }
     }
 }
@@ -100,7 +100,7 @@ mod tests {
         let addr = script_address(&script, Network::Testnet).unwrap();
 
         assert_eq!(addr.len(), 29, "Address must be 29 bytes");
-        assert_eq!(addr[0], 0x71, "Header byte must be 0x71 for testnet");
+        assert_eq!(addr[0], 0x70, "Header byte must be 0x70 for testnet");
     }
 
     #[test]
@@ -109,7 +109,7 @@ mod tests {
         let addr = script_address(&script, Network::Mainnet).unwrap();
 
         assert_eq!(addr.len(), 29, "Address must be 29 bytes");
-        assert_eq!(addr[0], 0x73, "Header byte must be 0x73 for mainnet");
+        assert_eq!(addr[0], 0x71, "Header byte must be 0x71 for mainnet");
     }
 
     #[test]
