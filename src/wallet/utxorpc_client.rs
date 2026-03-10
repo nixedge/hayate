@@ -121,6 +121,7 @@ impl WalletUtxorpcClient {
     /// - Execution limits and stake parameters
     ///
     /// Returns None if the server does not have protocol parameters available.
+    #[allow(dead_code)]
     pub async fn query_protocol_params(&mut self) -> Result<Option<crate::protocol_params::ProtocolParameters>> {
         let request = ReadParamsRequest {};
 
@@ -256,6 +257,7 @@ impl UtxoData {
 
 impl WalletUtxorpcClient {
     /// Submit a signed transaction to the Cardano network
+    #[allow(dead_code)]
     pub async fn submit_transaction(&mut self, tx_bytes: Vec<u8>) -> Result<SubmitTxResponse> {
         let request = SubmitTxRequest { tx: tx_bytes };
 

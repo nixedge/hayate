@@ -11,11 +11,10 @@ pub mod redeemer;
 pub mod script;
 
 // Re-export commonly used types
-pub use address::{script_address, script_hash, verify_script_hash, Network};
+pub use address::Network;
 pub use cost_models::default_cost_model;
-pub use datum::{DatumOption, VersionedMultisig, GovernanceMember};
-pub use oneshot::{OneShotPolicy, TempKeyMintPolicy};
-pub use redeemer::{ExUnits, Redeemer, RedeemerTag};
+pub use datum::DatumOption;
+pub use redeemer::Redeemer;
 pub use script::{PlutusScript, PlutusVersion};
 
 use thiserror::Error;

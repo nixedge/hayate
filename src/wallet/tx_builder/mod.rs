@@ -7,7 +7,7 @@ pub mod builder;
 pub mod types;
 
 pub use builder::PlutusTransactionBuilder;
-pub use types::{PlutusInput, PlutusOutput, TransactionBuildError};
+pub use types::{PlutusInput, PlutusOutput};
 
 use thiserror::Error;
 

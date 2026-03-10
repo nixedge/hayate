@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use crate::indexer::Network;
 
 /// Helper to find the latest snapshot for an LSM tree
+#[allow(dead_code)]
 fn get_latest_snapshot(tree_path: &std::path::Path) -> Result<Option<String>> {
     let temp_tree = LsmTree::open(tree_path, LsmConfig::default())?;
     let snapshots = temp_tree.list_snapshots()?;
@@ -22,6 +23,7 @@ fn get_latest_snapshot(tree_path: &std::path::Path) -> Result<Option<String>> {
 }
 
 /// Open an LSM tree, restoring from latest snapshot if available
+#[allow(dead_code)]
 fn open_lsm_tree_with_snapshot(tree_path: std::path::PathBuf) -> Result<LsmTree> {
     if let Some(snapshot_name) = get_latest_snapshot(&tree_path)? {
         tracing::info!("Restoring {:?} from snapshot: {}", tree_path.file_name().unwrap_or_default(), snapshot_name);
@@ -32,6 +34,7 @@ fn open_lsm_tree_with_snapshot(tree_path: std::path::PathBuf) -> Result<LsmTree>
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct UtxoEntry {
     pub address: Vec<u8>,
     pub amount: u64,
@@ -43,6 +46,7 @@ pub struct UtxoEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct StakeSnapshot {
     pub epoch: u64,
     pub amount: u64,           // Lovelace staked
@@ -51,6 +55,7 @@ pub struct StakeSnapshot {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct PoolSnapshot {
     pub epoch: u64,
     pub pool_id: Vec<u8>,
@@ -64,6 +69,7 @@ pub struct PoolSnapshot {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct ProtocolParams {
     pub epoch: u64,
     pub epoch_length: u64,
@@ -74,6 +80,7 @@ pub struct ProtocolParams {
 }
 
 /// Full node storage for ledger state and snapshots
+#[allow(dead_code)]
 pub struct NodeStorage {
     pub network: Network,
 
@@ -103,6 +110,7 @@ pub struct NodeStorage {
     base_path: PathBuf,
 }
 
+#[allow(dead_code)]
 impl NodeStorage {
     pub fn open(base_path: PathBuf, network: Network) -> Result<Self> {
         let network_path = base_path.join("node").join(network.as_str());
@@ -377,6 +385,7 @@ impl NodeStorage {
 
 // Helper functions for epoch calculations
 
+#[allow(dead_code)]
 pub fn slot_to_epoch(slot: u64, network: &Network) -> u64 {
     let epoch_length = match network {
         Network::Mainnet | Network::Preprod => 432_000,  // 5 days
@@ -387,6 +396,7 @@ pub fn slot_to_epoch(slot: u64, network: &Network) -> u64 {
     slot / epoch_length
 }
 
+#[allow(dead_code)]
 pub fn is_epoch_boundary(slot: u64, network: &Network) -> bool {
     let epoch_length = match network {
         Network::Mainnet | Network::Preprod => 432_000,
@@ -397,6 +407,7 @@ pub fn is_epoch_boundary(slot: u64, network: &Network) -> bool {
     (slot + 1).is_multiple_of(epoch_length)
 }
 
+#[allow(dead_code)]
 pub fn epoch_to_slot(epoch: u64, network: &Network) -> u64 {
     let epoch_length = match network {
         Network::Mainnet | Network::Preprod => 432_000,
