@@ -108,6 +108,22 @@ async fn run_chain_sync(
         processor.add_tracked_token(token.clone());
     }
 
+    // Add tracked addresses to processor
+    let tracked_addresses = indexer.tracked_addresses.read().await.clone();
+    for address_bech32 in &tracked_addresses {
+        use pallas_addresses::Address;
+        match Address::from_bech32(address_bech32) {
+            Ok(addr) => {
+                let address_bytes = addr.to_vec();
+                info!("Adding tracked address: {}", address_bech32);
+                processor.add_tracked_address(address_bytes);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to parse address {}: {}", address_bech32, e);
+            }
+        }
+    }
+
     if !tokens.is_empty() {
         info!("Tracking {} native token(s)", tokens.len());
     }
@@ -532,13 +548,13 @@ async fn main() -> anyhow::Result<()> {
     // Add network storage
     indexer.add_network(network.clone(), config.data_dir.clone()).await?;
 
-    // Load wallets and tokens from config
-    if config.wallets.is_empty() && config.tokens.is_empty() {
+    // Load wallets, addresses, and tokens from config
+    if config.wallets.is_empty() && config.tokens.is_empty() && config.addresses.is_empty() {
         return Err(anyhow::anyhow!(
             "Nothing configured to index. Please configure at least one of:\n\
              - Wallet xpubs (in 'wallets' array)\n\
-             - Native tokens to track (in 'tokens' array)\n\
-             - Smart contracts (coming soon)\n\n\
+             - Addresses to track (in 'addresses' array)\n\
+             - Native tokens to track (in 'tokens' array)\n\n\
              Generate a default config with: hayate config generate config.toml"
         ));
     }
@@ -549,6 +565,13 @@ async fn main() -> anyhow::Result<()> {
     }
 
     info!("Loaded {} wallet(s)", config.wallets.len());
+
+    for address in &config.addresses {
+        info!("Loading address: {}", address);
+        indexer.add_address(address.clone()).await?;
+    }
+
+    info!("Loaded {} address(es)", config.addresses.len());
 
     // If socket is provided, start API in background and run chain sync in foreground
     if let Some(socket_path) = socket {

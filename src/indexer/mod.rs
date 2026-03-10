@@ -717,6 +717,7 @@ pub struct ChainTip {
 pub struct HayateIndexer {
     pub networks: RwLock<HashMap<Network, StorageHandle>>,
     pub account_xpubs: RwLock<Vec<String>>,
+    pub tracked_addresses: RwLock<Vec<String>>,
     pub gap_limit: u32,
     block_updates: broadcast::Sender<BlockUpdate>,
 }
@@ -729,6 +730,7 @@ impl HayateIndexer {
         Ok(Self {
             networks: RwLock::new(HashMap::new()),
             account_xpubs: RwLock::new(Vec::new()),
+            tracked_addresses: RwLock::new(Vec::new()),
             gap_limit,
             block_updates,
         })
@@ -760,6 +762,11 @@ impl HayateIndexer {
     
     pub async fn add_account(&self, xpub: String) -> Result<()> {
         self.account_xpubs.write().await.push(xpub);
+        Ok(())
+    }
+
+    pub async fn add_address(&self, address: String) -> Result<()> {
+        self.tracked_addresses.write().await.push(address);
         Ok(())
     }
     
