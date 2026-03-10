@@ -319,6 +319,23 @@ impl PlutusTransactionBuilder {
         Ok(self)
     }
 
+    /// Add a Plutus script to the witness set
+    ///
+    /// Use this for Plutus minting policies or validators
+    pub fn add_plutus_script(&mut self, script: PlutusScript) -> TxBuilderResult<&mut Self> {
+        let script_kind = match script.version() {
+            PlutusVersion::V1 => ScriptKind::PlutusV1,
+            PlutusVersion::V2 => ScriptKind::PlutusV2,
+            PlutusVersion::V3 => ScriptKind::PlutusV3,
+        };
+
+        self.staging_tx = self
+            .staging_tx
+            .clone()
+            .script(script_kind, script.cbor().to_vec());
+        Ok(self)
+    }
+
     /// Add a mint redeemer for Plutus minting policy
     ///
     /// Use this when minting with a Plutus minting policy (not native scripts).
