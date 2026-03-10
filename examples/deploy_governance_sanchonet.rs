@@ -10,8 +10,8 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 struct GovernanceKeyFile {
-    cardano_hash: String,
-    sr25519_key: String,
+    cardano_key_hash: String,
+    sr25519_public_key: String,
 }
 
 fn load_governance_member(path: &str) -> Result<GovernanceMember, Box<dyn std::error::Error>> {
@@ -19,8 +19,8 @@ fn load_governance_member(path: &str) -> Result<GovernanceMember, Box<dyn std::e
     let key_file: GovernanceKeyFile = serde_json::from_str(&json_data)?;
 
     // Parse hex strings to byte arrays
-    let cardano_hash_vec = hex::decode(&key_file.cardano_hash)?;
-    let sr25519_vec = hex::decode(&key_file.sr25519_key)?;
+    let cardano_hash_vec = hex::decode(&key_file.cardano_key_hash)?;
+    let sr25519_vec = hex::decode(&key_file.sr25519_public_key)?;
 
     if cardano_hash_vec.len() != 28 {
         return Err(format!("Invalid cardano_hash length: {}", cardano_hash_vec.len()).into());

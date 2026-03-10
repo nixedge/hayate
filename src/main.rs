@@ -71,6 +71,38 @@ async fn run_chain_sync(
         processor.add_wallet_id(wallet_id.clone());
     }
 
+    // Derive key hashes from account xpubs and populate wallet filter
+    for wallet_xpub_str in &wallet_ids {
+        match keys::parse_account_xpub(wallet_xpub_str) {
+            Ok(account_xpub) => {
+                // Derive wallet keys with gap limit
+                match keys::derive_account_keys(account_xpub, indexer.gap_limit) {
+                    Ok(wallet_account) => {
+                        // Add all derived payment key hashes and stake key hash to filter
+                        let (payment_hashes, stake_hash) = keys::get_wallet_key_hashes(&wallet_account);
+
+                        info!(
+                            "Indexing wallet {} with {} payment addresses and stake key",
+                            &wallet_xpub_str[..20],
+                            payment_hashes.len()
+                        );
+
+                        // Add each payment key with the stake key to the filter
+                        for payment_hash in payment_hashes {
+                            processor.add_wallet(payment_hash, stake_hash);
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to derive keys from xpub {}: {}", wallet_xpub_str, e);
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to parse account xpub {}: {}", wallet_xpub_str, e);
+            }
+        }
+    }
+
     // Add tracked tokens to processor
     for token in &tokens {
         processor.add_tracked_token(token.clone());

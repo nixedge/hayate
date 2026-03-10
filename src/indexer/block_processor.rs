@@ -819,6 +819,8 @@ pub fn epoch_to_slot(epoch: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pallas_addresses::{Address, Network, ShelleyAddress, ShelleyPaymentPart, ShelleyDelegationPart};
+    use pallas_crypto::hash::Hash;
 
     #[test]
     fn test_slot_epoch_conversion() {
@@ -839,5 +841,222 @@ mod tests {
         assert!(is_epoch_boundary(86_400));
         assert!(!is_epoch_boundary(1));
         assert!(!is_epoch_boundary(86_401));
+    }
+
+    // ===== Wallet Filter Tests =====
+
+    // Helper to create a test key hash
+    fn test_hash(seed: u8) -> Hash<28> {
+        let mut bytes = [0u8; 28];
+        bytes[0] = seed;
+        Hash::from(bytes)
+    }
+
+    // Helper to create an enterprise address (payment only, no stake)
+    fn enterprise_address(payment_hash: Hash<28>, network: Network) -> Vec<u8> {
+        let addr = ShelleyAddress::new(
+            network,
+            ShelleyPaymentPart::Key(payment_hash),
+            ShelleyDelegationPart::Null,
+        );
+        Address::Shelley(addr).to_vec()
+    }
+
+    // Helper to create a full address (payment + stake)
+    fn full_address(payment_hash: Hash<28>, stake_hash: Hash<28>, network: Network) -> Vec<u8> {
+        let addr = ShelleyAddress::new(
+            network,
+            ShelleyPaymentPart::Key(payment_hash),
+            ShelleyDelegationPart::Key(stake_hash),
+        );
+        Address::Shelley(addr).to_vec()
+    }
+
+    #[test]
+    fn test_empty_filter_tracks_everything() {
+        let filter = WalletFilter::new();
+        let payment = test_hash(1);
+        let stake = test_hash(2);
+
+        // Empty filter should accept any address
+        let addr = enterprise_address(payment, Network::Testnet);
+        assert!(filter.is_our_address(&addr), "Empty filter should track all addresses");
+
+        let addr = full_address(payment, stake, Network::Testnet);
+        assert!(filter.is_our_address(&addr), "Empty filter should track all addresses");
+    }
+
+    #[test]
+    fn test_filter_matches_payment_key() {
+        let mut filter = WalletFilter::new();
+        let our_payment = test_hash(1);
+        let other_payment = test_hash(2);
+        let our_stake = test_hash(10);
+
+        filter.add_payment_key_hash(our_payment);
+        filter.add_stake_credential(our_stake);
+
+        // Should match our payment key (enterprise)
+        let our_addr = enterprise_address(our_payment, Network::Testnet);
+        assert!(filter.is_our_address(&our_addr), "Should match our payment key");
+
+        // Should NOT match other payment key
+        let other_addr = enterprise_address(other_payment, Network::Testnet);
+        assert!(!filter.is_our_address(&other_addr), "Should not match other payment key");
+    }
+
+    #[test]
+    fn test_filter_enterprise_address() {
+        let mut filter = WalletFilter::new();
+        let our_payment = test_hash(1);
+        let our_stake = test_hash(10);
+
+        filter.add_payment_key_hash(our_payment);
+        filter.add_stake_credential(our_stake);
+
+        // Enterprise address with our payment key should match
+        let addr = enterprise_address(our_payment, Network::Testnet);
+        assert!(filter.is_our_address(&addr), "Enterprise address with our payment key should match");
+    }
+
+    #[test]
+    fn test_filter_full_address_with_matching_stake() {
+        let mut filter = WalletFilter::new();
+        let our_payment = test_hash(1);
+        let our_stake = test_hash(10);
+
+        filter.add_payment_key_hash(our_payment);
+        filter.add_stake_credential(our_stake);
+
+        // Full address with both our payment and stake should match
+        let addr = full_address(our_payment, our_stake, Network::Testnet);
+        assert!(filter.is_our_address(&addr), "Full address with both our keys should match");
+    }
+
+    #[test]
+    fn test_filter_full_address_with_different_stake() {
+        let mut filter = WalletFilter::new();
+        let our_payment = test_hash(1);
+        let our_stake = test_hash(10);
+        let other_stake = test_hash(20);
+
+        filter.add_payment_key_hash(our_payment);
+        filter.add_stake_credential(our_stake);
+
+        // Full address with our payment but different stake should NOT match (strict filtering)
+        let addr = full_address(our_payment, other_stake, Network::Testnet);
+        assert!(!filter.is_our_address(&addr), "Full address with different stake should not match when stake filtering is enabled");
+    }
+
+    #[test]
+    fn test_filter_multiple_payment_keys() {
+        let mut filter = WalletFilter::new();
+        let payment1 = test_hash(1);
+        let payment2 = test_hash(2);
+        let payment3 = test_hash(3);
+        let other_payment = test_hash(99);
+        let stake = test_hash(10);
+
+        filter.add_payment_key_hash(payment1);
+        filter.add_payment_key_hash(payment2);
+        filter.add_payment_key_hash(payment3);
+        filter.add_stake_credential(stake);
+
+        // All our payment keys should match
+        assert!(filter.is_our_address(&enterprise_address(payment1, Network::Testnet)));
+        assert!(filter.is_our_address(&enterprise_address(payment2, Network::Testnet)));
+        assert!(filter.is_our_address(&enterprise_address(payment3, Network::Testnet)));
+
+        // Other payment key should not match
+        assert!(!filter.is_our_address(&enterprise_address(other_payment, Network::Testnet)));
+    }
+
+    #[test]
+    fn test_filter_rejects_script_addresses() {
+        let mut filter = WalletFilter::new();
+        let payment_hash = test_hash(1);
+        filter.add_payment_key_hash(payment_hash);
+
+        // Create a script address
+        let script_addr = ShelleyAddress::new(
+            Network::Testnet,
+            ShelleyPaymentPart::Script(payment_hash), // Script, not Key
+            ShelleyDelegationPart::Null,
+        );
+        let addr_bytes = Address::Shelley(script_addr).to_vec();
+
+        // Script addresses should not match even with same hash
+        assert!(!filter.is_our_address(&addr_bytes), "Script addresses should not match");
+    }
+
+    #[test]
+    fn test_filter_with_no_stake_tracking() {
+        let mut filter = WalletFilter::new();
+        let our_payment = test_hash(1);
+        let any_stake = test_hash(99);
+
+        // Only add payment key, no stake key
+        filter.add_payment_key_hash(our_payment);
+
+        // Full address with our payment + any stake should match
+        // (because we're not filtering by stake)
+        let addr = full_address(our_payment, any_stake, Network::Testnet);
+        assert!(filter.is_our_address(&addr),
+            "When not tracking stake keys, any stake should be accepted with our payment key");
+    }
+
+    #[test]
+    fn test_is_our_payment_key() {
+        let mut filter = WalletFilter::new();
+        let key1 = test_hash(1);
+        let key2 = test_hash(2);
+
+        filter.add_payment_key_hash(key1);
+
+        assert!(filter.is_our_payment_key(&key1));
+        assert!(!filter.is_our_payment_key(&key2));
+    }
+
+    #[test]
+    fn test_is_our_stake_key() {
+        let mut filter = WalletFilter::new();
+        let key1 = test_hash(10);
+        let key2 = test_hash(20);
+
+        filter.add_stake_credential(key1);
+
+        assert!(filter.is_our_stake_key(&key1));
+        assert!(!filter.is_our_stake_key(&key2));
+    }
+
+    // Property-based test: any address with our payment key should match (enterprise)
+    #[test]
+    fn property_enterprise_addresses_always_match() {
+        let mut filter = WalletFilter::new();
+        let our_payment = test_hash(1);
+        filter.add_payment_key_hash(our_payment);
+
+        // Test with different networks
+        for network in [Network::Testnet, Network::Mainnet] {
+            let addr = enterprise_address(our_payment, network);
+            assert!(filter.is_our_address(&addr),
+                "Enterprise address should match on {:?}", network);
+        }
+    }
+
+    // Property-based test: addresses without our payment key should never match
+    #[test]
+    fn property_foreign_addresses_never_match() {
+        let mut filter = WalletFilter::new();
+        let our_payment = test_hash(1);
+        filter.add_payment_key_hash(our_payment);
+
+        // Test multiple different payment keys
+        for seed in 2..10u8 {
+            let foreign_payment = test_hash(seed);
+            let addr = enterprise_address(foreign_payment, Network::Testnet);
+            assert!(!filter.is_our_address(&addr),
+                "Foreign address with seed {} should not match", seed);
+        }
     }
 }
