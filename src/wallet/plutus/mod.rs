@@ -14,7 +14,8 @@ pub mod script;
 pub use address::Network;
 pub use cost_models::default_cost_model;
 pub use datum::DatumOption;
-pub use redeemer::Redeemer;
+#[allow(unused_imports)]
+pub use redeemer::{Redeemer, RedeemerTag};
 pub use script::{PlutusScript, PlutusVersion};
 
 use thiserror::Error;
