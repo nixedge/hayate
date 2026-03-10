@@ -5,8 +5,11 @@
 use hayate::wallet::{Wallet, Network};
 use hayate::wallet::unified_tx::UnifiedTxBuilder;
 use hayate::wallet::plutus::{PlutusScript, DatumOption, Network as PlutusNetwork, VersionedMultisig, GovernanceMember};
+use hayate::wallet::utxorpc_client::AssetData;
 use std::sync::Arc;
 use serde::Deserialize;
+use pallas_crypto::hash::Hasher;
+use pallas_crypto::key::ed25519::SecretKey;
 
 #[derive(Debug, Deserialize)]
 struct GovernanceKeyFile {
@@ -46,9 +49,9 @@ async fn deploy_contract(
     contract_path: &str,
     contract_name: &str,
     members: Vec<GovernanceMember>,
-    threshold: u32,
+    total_signers: u32,
     deployment_ada: f64,
-) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+) -> Result<(Vec<u8>, Vec<u8>), Box<dyn std::error::Error>> {
     println!("\n=== Deploying {} ===", contract_name);
 
     // Load contract script
@@ -64,13 +67,35 @@ async fn deploy_contract(
 
     println!("  Contract: {}", contract_path);
     println!("  Address:  {}", contract_address);
+    println!("  Script Hash: {}", hex::encode(contract_script.hash()));
     println!("  Members:  {}", members.len());
-    println!("  Threshold: {}", threshold);
+    println!("  Total Signers: {}", total_signers);
     println!("  Amount:   {} ADA", deployment_ada);
+
+    // Generate a truly temporary one-shot key for NFT minting
+    use rand::rngs::OsRng;
+    let temp_secret = SecretKey::new(OsRng);
+    let temp_public = temp_secret.public_key();
+    let temp_public_bytes: [u8; 32] = temp_public.into();
+    let vkey_hash: pallas_crypto::hash::Hash<28> = Hasher::<224>::hash(&temp_public_bytes);
+
+    // Create native script minting policy using the temporary key
+    use hayate::wallet::plutus::oneshot::TempKeyMintPolicy;
+    let mut vkey_hash_bytes = [0u8; 28];
+    vkey_hash_bytes.copy_from_slice(vkey_hash.as_ref());
+    let mint_policy = TempKeyMintPolicy::new(vkey_hash_bytes);
+    let native_script = mint_policy.to_native_script()?;
+    let policy_id = mint_policy.policy_id()?;
+
+    println!("  NFT Policy ID: {}", hex::encode(&policy_id));
+    println!("  (Temporary minting key will be discarded after this transaction)");
+
+    // Token name for governance NFT (just use "GOV")
+    let token_name = b"GOV";
 
     // Create VersionedMultisig datum
     let datum = VersionedMultisig {
-        threshold,
+        total_signers,
         members,
         logic_round: 0,
     };
@@ -80,29 +105,39 @@ async fn deploy_contract(
 
     let deployment_lovelace = (deployment_ada * 1_000_000.0) as u64;
 
+    // Build NFT asset data for the script output
+    let nft_asset = AssetData {
+        policy_id: policy_id.to_vec(),
+        asset_name: token_name.to_vec(),
+        amount: 1,
+    };
+
     // Build and submit deployment transaction
     println!("  Building transaction...");
 
-    let mut builder = UnifiedTxBuilder::new(wallet, endpoint)
+    let mut builder = UnifiedTxBuilder::new(wallet.clone(), endpoint)
         .await?;
 
     builder
         .query_utxos().await?
+        .mint_with_native_script(native_script, policy_id, token_name.to_vec(), 1)?
         .pay_to_script_with_assets(
-            contract_address_bytes.clone(),
+            contract_address_bytes,
             deployment_lovelace,
-            Vec::new(),
+            vec![nft_asset],
             datum_option,
-            Some(contract_script),
-        )?
-        .auto_collateral().await?;
+            None, // Don't include reference script for now
+        )?;
+    // Native scripts don't need collateral
 
-    // Build and sign the transaction
-    let signed_tx_bytes = builder.build_and_sign().await?;
+    // Build and sign the transaction with both wallet keys and temp minting key
+    println!("  Signing transaction with wallet keys + temporary minting key...");
+    let temp_private_key = pallas_wallet::PrivateKey::Normal(temp_secret);
+    let signed_tx_bytes = builder.build_and_sign_with_keys(vec![temp_private_key]).await?;
 
     // Calculate tx hash
-    use pallas_crypto::hash::Hasher;
-    let tx_hash = Hasher::<256>::hash(&signed_tx_bytes);
+    use pallas_crypto::hash::Hasher as CryptoHasher;
+    let tx_hash = CryptoHasher::<256>::hash(&signed_tx_bytes);
 
     // Save signed transaction in cardano-cli TextEnvelope format
     let tx_file = format!("/tmp/deploy-{}.signed", contract_name.replace(' ', "-"));
@@ -118,6 +153,7 @@ async fn deploy_contract(
 
     println!("  Transaction built and signed successfully!");
     println!("  TX Hash: {}", hex::encode(&tx_hash));
+    println!("  NFT Policy: {}", hex::encode(&policy_id));
     println!("  Signed transaction saved to: {}", tx_file);
     println!("  ");
     println!("  To submit manually, run:");
@@ -125,9 +161,8 @@ async fn deploy_contract(
     println!("      --tx-file {} \\", tx_file);
     println!("      --socket-path /home/sam/work/iohk/midnight-playground/.run/sanchonet/cardano-node/node.socket");
     println!("  ");
-    println!("  ✅ Transaction ready for submission!");
 
-    Ok(tx_hash.to_vec())
+    Ok((tx_hash.to_vec(), policy_id.to_vec()))
 }
 
 #[tokio::main]
@@ -161,21 +196,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Enterprise Address: {}\n", enterprise_addr);
 
     // Load Council governance members
-    println!("Loading governance members...");
+    println!("Loading Council governance members...");
     let council_members = vec![
         load_governance_member(&format!("{}/council-1.json", gov_keys_dir))?,
         load_governance_member(&format!("{}/council-2.json", gov_keys_dir))?,
         load_governance_member(&format!("{}/council-3.json", gov_keys_dir))?,
     ];
-    println!("  Council members: {}", council_members.len());
-
-    // Load Technical Authority members
-    let ta_members = vec![
-        load_governance_member(&format!("{}/ta-1.json", gov_keys_dir))?,
-        load_governance_member(&format!("{}/ta-2.json", gov_keys_dir))?,
-        load_governance_member(&format!("{}/ta-3.json", gov_keys_dir))?,
-    ];
-    println!("  TA members: {}", ta_members.len());
+    println!("  Council members loaded: {}", council_members.len());
 
     // Deploy Council governance contract
     let council_tx = deploy_contract(
@@ -184,31 +211,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &format!("{}/council_governance_council_governance.plutus", contracts_dir),
         "Council Governance",
         council_members,
-        2,  // threshold
-        50.0,  // 50 ADA
-    ).await?;
-
-    // Deploy Technical Authority contract
-    let ta_tx = deploy_contract(
-        wallet.clone(),
-        endpoint.clone(),
-        &format!("{}/tech_auth_governance_tech_auth_governance.plutus", contracts_dir),
-        "Technical Authority",
-        ta_members,
-        2,  // threshold
+        3,  // total_signers = 3 (we have 3 council members)
         50.0,  // 50 ADA
     ).await?;
 
     println!("\n========================================");
-    println!("✅ All governance contracts deployed!");
+    println!("✅ Council governance contract deployed!");
     println!("========================================");
-    println!("\nTransaction Hashes:");
-    println!("  Council:    {}", hex::encode(&council_tx));
-    println!("  Tech Auth:  {}", hex::encode(&ta_tx));
+    println!("\nTransaction Hash: {}", hex::encode(&council_tx.0));
+    println!("NFT Policy ID:    {}", hex::encode(&council_tx.1));
     println!("\nNext steps:");
-    println!("1. Wait for transactions to confirm");
-    println!("2. Query UTxOs to get contract references");
-    println!("3. Update genesis configuration with contract addresses");
+    println!("1. Wait for transaction to confirm");
+    println!("2. Query contract UTxO to verify NFT is locked");
+    println!("3. Test council rotation with same members + incremented logic_round");
 
     Ok(())
 }
