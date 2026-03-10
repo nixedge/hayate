@@ -10,3 +10,6 @@ pub mod types;
 pub mod error;
 pub mod builder;
 
+pub use builder::UnifiedTxBuilder;
+pub use error::UnifiedTxError;
+pub use types::*;

@@ -19,3 +19,4 @@ pub mod unified_tx;
 pub use storage::*;
 pub use cli::handle_wallet_command;
 pub use wallet::Wallet;
+pub use derivation::Network;
