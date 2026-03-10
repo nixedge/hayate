@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 
 // Import from lib
-use hayate::node::{NodeStorage, UtxoEntry, slot_to_epoch};
+use hayate::node::storage::{NodeStorage, UtxoEntry, slot_to_epoch};
 use hayate::indexer::Network;
 use hayate::chain_sync::HayateSync;
 use pallas_network::miniprotocols::Point;

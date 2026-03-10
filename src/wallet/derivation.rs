@@ -161,6 +161,7 @@ pub fn derive_stake_address(
 }
 
 /// Derive enterprise address (payment only, no staking)
+#[allow(dead_code)]
 pub fn derive_enterprise_address(
     account_key: &XPrv,
     address_index: u32,

@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 #[derive(Error, Debug)]
+#[allow(dead_code)]
 pub enum ProtocolParamError {
     #[error("Failed to query protocol parameters: {0}")]
     QueryFailed(String),
@@ -34,6 +35,7 @@ pub struct Rational {
     pub denominator: u64,
 }
 
+#[allow(dead_code)]
 impl Rational {
     pub fn new(numerator: u64, denominator: u64) -> Self {
         Self {
@@ -104,6 +106,7 @@ pub struct ProtocolParameters {
     pub epoch: u64,
 }
 
+#[allow(dead_code)]
 impl ProtocolParameters {
     /// Calculate minimum fee for a transaction
     ///

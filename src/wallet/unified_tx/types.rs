@@ -105,9 +105,11 @@ impl BuiltTransaction {
 }
 
 // Hex serialization helper for BuiltTransaction
+#[allow(dead_code)]
 mod hex_serde {
     use serde::{Deserialize, Deserializer, Serializer};
 
+    #[allow(dead_code)]
     pub fn serialize<S>(data: &Vec<u8>, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -115,6 +117,7 @@ mod hex_serde {
         serializer.serialize_str(&hex::encode(data))
     }
 
+    #[allow(dead_code)]
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
     where
         D: Deserializer<'de>,

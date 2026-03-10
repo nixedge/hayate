@@ -34,11 +34,13 @@ use pallas_addresses::Address;
 /// ```
 #[derive(Clone)]
 pub struct Wallet {
+    #[allow(dead_code)]
     root_key: XPrv,
     account: Account,
     network: Network,
 }
 
+#[allow(dead_code)]
 impl Wallet {
     /// Create a wallet from a BIP39 mnemonic
     ///
@@ -172,6 +174,7 @@ impl Wallet {
 }
 
 /// Convert ed25519_bip32::XPrv to pallas_wallet::PrivateKey
+#[allow(dead_code)]
 fn xprv_to_pallas_privatekey(xprv: &XPrv) -> DerivationResult<pallas_wallet::PrivateKey> {
     // XPrv is 64 bytes, we need to get the bytes
     // The as_ref() method returns &[u8]
@@ -202,6 +205,7 @@ fn xprv_to_pallas_privatekey(xprv: &XPrv) -> DerivationResult<pallas_wallet::Pri
 /// Convert Ed25519 secret key bytes to pallas_wallet::PrivateKey
 ///
 /// This is useful for signing with temporary keys (e.g., for NFT minting)
+#[allow(dead_code)]
 pub fn ed25519_secret_to_privatekey(secret_bytes: &[u8]) -> derivation::DerivationResult<pallas_wallet::PrivateKey> {
     if secret_bytes.len() != 32 {
         return Err(derivation::DerivationError::DerivationFailed(format!(
