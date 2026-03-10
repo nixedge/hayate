@@ -10,6 +10,9 @@ pub mod types;
 pub mod error;
 pub mod builder;
 
+#[allow(unused_imports)]
 pub use builder::UnifiedTxBuilder;
+#[allow(unused_imports)]
 pub use error::UnifiedTxError;
+#[allow(unused_imports)]
 pub use types::*;
