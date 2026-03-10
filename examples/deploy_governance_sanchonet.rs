@@ -83,8 +83,10 @@ async fn deploy_contract(
     // Build and submit deployment transaction
     println!("  Building transaction...");
 
-    let tx_hash = UnifiedTxBuilder::new(wallet, endpoint)
-        .await?
+    let mut builder = UnifiedTxBuilder::new(wallet, endpoint)
+        .await?;
+
+    builder
         .query_utxos().await?
         .pay_to_script_with_assets(
             contract_address_bytes,
@@ -93,12 +95,41 @@ async fn deploy_contract(
             datum_option,
             Some(contract_script),
         )?
-        .auto_collateral().await?
-        .build_sign_submit().await?;
+        .auto_collateral().await?;
+
+    // Build and sign the transaction
+    let signed_tx_bytes = builder.build_and_sign().await?;
+
+    // Write to file and submit with cardano-cli
+    let tx_file = format!("/tmp/deploy-{}.signed", hex::encode(&contract_address_bytes[..8]));
+    std::fs::write(&tx_file, &signed_tx_bytes)?;
+
+    println!("  Submitting with cardano-cli...");
+    let socket_path = "/home/sam/work/iohk/midnight-playground/.run/sanchonet/cardano-node/node.socket";
+
+    let output = std::process::Command::new("cardano-cli")
+        .args(&[
+            "transaction", "submit",
+            "--tx-file", &tx_file,
+            "--socket-path", socket_path,
+        ])
+        .output()?;
+
+    // Clean up temp file
+    let _ = std::fs::remove_file(&tx_file);
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("cardano-cli submission failed: {}", stderr).into());
+    }
+
+    // Calculate tx hash
+    use pallas_crypto::hash::Hasher;
+    let tx_hash = Hasher::<256>::hash(&signed_tx_bytes);
 
     println!("  ✅ Deployed! TX Hash: {}", hex::encode(&tx_hash));
 
-    Ok(tx_hash)
+    Ok(tx_hash.to_vec())
 }
 
 #[tokio::main]
