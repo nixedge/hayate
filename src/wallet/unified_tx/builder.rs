@@ -587,7 +587,7 @@ impl UnifiedTxBuilder {
         params.calculate_min_utxo(output_size_bytes).max(1_000_000) // At least 1 ADA
     }
 
-    /// Select coins using greedy algorithm
+    /// Select coins using greedy algorithm with token-aware prioritization
     fn select_coins(
         &self,
         required_lovelace: u64,
@@ -600,15 +600,31 @@ impl UnifiedTxBuilder {
         let mut total_lovelace = 0u64;
         let mut total_assets: BTreeMap<String, u64> = BTreeMap::new();
 
-        // Greedy selection: take UTxOs until requirements met
-        for utxo in utxos {
-            // Skip UTxOs already used as script inputs
-            if self.script_inputs.iter().any(|si| {
-                si.utxo.tx_hash == utxo.tx_hash && si.utxo.output_index == utxo.output_index
-            }) {
-                continue;
-            }
+        // If we don't need any specific assets, prefer pure ADA UTxOs to avoid token handling
+        let need_assets = !required_assets.is_empty();
 
+        // Partition UTxOs into pure ADA and those with native tokens
+        let (pure_ada_utxos, utxos_with_tokens): (Vec<_>, Vec<_>) = utxos
+            .iter()
+            .filter(|utxo| {
+                // Skip UTxOs already used as script inputs
+                !self.script_inputs.iter().any(|si| {
+                    si.utxo.tx_hash == utxo.tx_hash && si.utxo.output_index == utxo.output_index
+                })
+            })
+            .partition(|utxo| utxo.assets.is_empty());
+
+        // Create selection order: prefer pure ADA unless we need specific tokens
+        let selection_order: Vec<&UtxoData> = if need_assets {
+            // Need tokens: try token-bearing UTxOs first, then pure ADA
+            utxos_with_tokens.into_iter().chain(pure_ada_utxos).collect()
+        } else {
+            // Don't need tokens: use pure ADA first, avoid tokens if possible
+            pure_ada_utxos.into_iter().chain(utxos_with_tokens).collect()
+        };
+
+        // Greedy selection: take UTxOs until requirements met
+        for utxo in selection_order {
             selected.push(utxo.clone());
             total_lovelace = total_lovelace.saturating_add(utxo.coin);
 
@@ -716,40 +732,164 @@ impl UnifiedTxBuilder {
             }
         }
 
-        // Estimate transaction size (rough estimate)
-        let base_size = 200u64; // Base transaction overhead
-        let input_size = 150u64; // Approximate bytes per input
-        let output_size = 50u64; // Approximate bytes per output
-        let estimated_inputs = ((total_output_lovelace / 10_000_000) + 1).min(10); // Rough estimate
+        // Calculate minted assets - these don't need to be selected from UTxOs
+        let mut minted_assets: BTreeMap<String, u64> = BTreeMap::new();
+        for mint_op in &self.mints {
+            if mint_op.amount > 0 {
+                // Only positive amounts (minting) reduce required_assets
+                let key = format!(
+                    "{}:{}",
+                    hex::encode(&mint_op.policy_id),
+                    hex::encode(&mint_op.asset_name)
+                );
+                *minted_assets.entry(key).or_insert(0) += mint_op.amount as u64;
+            }
+        }
+
+        // Subtract minted assets from required assets
+        // Only need to select from UTxOs what's not being minted
+        for (asset_key, minted_amount) in &minted_assets {
+            if let Some(required) = required_assets.get_mut(asset_key) {
+                if *required <= *minted_amount {
+                    // Fully covered by minting, don't need from UTxOs
+                    *required = 0;
+                } else {
+                    // Partially covered, still need some from UTxOs
+                    *required -= *minted_amount;
+                }
+            }
+        }
+
+        // Remove zero-amount entries
+        required_assets.retain(|_, amount| *amount > 0);
+
+        // Initial fee estimation with more realistic size estimates for Conway era
+        let base_size = 300u64;  // Base transaction overhead (increased for Conway era)
+        let input_size = 180u64; // Per input (includes witness)
+        let output_size = 60u64; // Per simple output
+
+        // Add extra size for script outputs with datum and script references
+        let mut extra_output_size = 0u64;
+        for output in &self.outputs {
+            if let TxOutput::ScriptPayment { datum: _, script_ref, .. } = output {
+                extra_output_size += 100; // Datum hash/inline
+                if script_ref.is_some() {
+                    extra_output_size += 200; // Script reference
+                }
+            }
+        }
+
+        let estimated_inputs = ((total_output_lovelace / 10_000_000) + 1).min(10);
         let estimated_tx_size = base_size + (estimated_inputs * input_size) +
-            ((self.outputs.len() as u64 + 1) * output_size); // +1 for change
+            ((self.outputs.len() as u64 + 1) * output_size) + extra_output_size;
 
-        // Estimate fee
-        let estimated_fee = self.estimate_fee(estimated_tx_size, &params);
+        let mut current_fee = self.estimate_fee(estimated_tx_size, &params);
+        let mut iteration = 0;
+        let max_iterations = 3;
 
-        // Add fee to required lovelace
-        let required_lovelace_with_fee = total_output_lovelace.saturating_add(estimated_fee);
+        loop {
+            iteration += 1;
+            if iteration > max_iterations {
+                return Err(UnifiedTxError::FeeEstimationError(
+                    "Fee calculation did not converge after 3 iterations".to_string()
+                ));
+            }
 
-        tracing::debug!(
-            "Building tx: outputs={} lovelace, fee={} lovelace, total_required={} lovelace",
-            total_output_lovelace,
-            estimated_fee,
-            required_lovelace_with_fee
-        );
+            tracing::debug!(
+                "Fee iteration {}: estimated_size={} bytes, fee={} lovelace",
+                iteration,
+                estimated_tx_size,
+                current_fee
+            );
 
-        // Select coins
-        let (selected_utxos, change_lovelace, change_assets) =
-            self.select_coins(required_lovelace_with_fee, &required_assets)?;
+            // Calculate required lovelace including current fee estimate
+            let required_lovelace_with_fee = total_output_lovelace.saturating_add(current_fee);
 
-        tracing::info!(
-            "Selected {} UTxOs, change={} lovelace",
-            selected_utxos.len(),
-            change_lovelace
-        );
+            // Select coins
+            let (selected_utxos, change_lovelace, change_assets) =
+                self.select_coins(required_lovelace_with_fee, &required_assets)?;
 
-        // Build using PlutusTransactionBuilder
+            tracing::debug!(
+                "Selected {} UTxOs, change={} lovelace, change_assets={}",
+                selected_utxos.len(),
+                change_lovelace,
+                change_assets.len()
+            );
+
+            // Build the transaction to measure actual size
+            let (tx_bytes, tx_hash, actual_change) = self.build_tx_internal(
+                &params,
+                &selected_utxos,
+                change_lovelace,
+                &change_assets,
+                current_fee,
+            )?;
+
+            let actual_size = tx_bytes.len() as u64;
+            let required_fee = self.estimate_fee(actual_size, &params);
+
+            tracing::debug!(
+                "Built tx: actual_size={} bytes, current_fee={}, required_fee={}",
+                actual_size,
+                current_fee,
+                required_fee
+            );
+
+            // Check if fee is sufficient
+            if required_fee <= current_fee {
+                // Fee is sufficient, we're done
+                tracing::info!(
+                    "Transaction built successfully: {} bytes, fee={} lovelace, hash={}",
+                    actual_size,
+                    current_fee,
+                    hex::encode(&tx_hash)
+                );
+
+                return Ok(BuiltTransaction {
+                    tx_bytes,
+                    tx_hash,
+                    fee_paid: current_fee,
+                    inputs_used: selected_utxos,
+                    change_amount: actual_change,
+                    output_count: self.outputs.len() + if actual_change > 0 { 1 } else { 0 },
+                });
+            }
+
+            // Fee is insufficient, need to rebuild with higher fee
+            let fee_deficit = required_fee - current_fee;
+            tracing::debug!(
+                "Fee insufficient by {} lovelace, rebuilding...",
+                fee_deficit
+            );
+
+            // Check if we can cover the deficit from change
+            if change_lovelace >= fee_deficit + self.calculate_min_utxo(60, &params) {
+                // We can increase fee without selecting more coins
+                current_fee = required_fee;
+                continue;
+            } else {
+                // Need to select more coins
+                return Err(UnifiedTxError::FeeEstimationError(
+                    format!(
+                        "Insufficient change to cover fee. Required: {}, Current: {}, Change: {}. Need to select more UTxOs.",
+                        required_fee, current_fee, change_lovelace
+                    )
+                ));
+            }
+        }
+    }
+
+    /// Internal helper to build transaction with given parameters
+    fn build_tx_internal(
+        &self,
+        params: &ProtocolParameters,
+        selected_utxos: &[UtxoData],
+        change_lovelace: u64,
+        change_assets: &BTreeMap<String, u64>,
+        fee: u64,
+    ) -> Result<(Vec<u8>, Vec<u8>, u64)> {
         use crate::wallet::tx_builder::PlutusTransactionBuilder;
-        use crate::wallet::tx_builder::PlutusInput;
+        use crate::wallet::tx_builder::{PlutusInput, PlutusOutput};
         use crate::wallet::plutus::Network as PlutusNetwork;
 
         let network = match self.network {
@@ -757,13 +897,11 @@ impl UnifiedTxBuilder {
             Network::Testnet => PlutusNetwork::Testnet,
         };
 
-        // Get change address
         let change_addr_bytes = self.wallet.payment_address_bytes(self.change_address_index)?;
-
         let mut builder = PlutusTransactionBuilder::new(network, change_addr_bytes);
 
         // Add selected UTxOs as inputs
-        for utxo in &selected_utxos {
+        for utxo in selected_utxos {
             let input = PlutusInput::regular(utxo.clone());
             builder.add_input(&input)?;
         }
@@ -780,8 +918,6 @@ impl UnifiedTxBuilder {
         }
 
         // Add outputs
-        use crate::wallet::tx_builder::PlutusOutput;
-
         for output in &self.outputs {
             match output {
                 TxOutput::Payment { address, lovelace, assets } => {
@@ -810,17 +946,18 @@ impl UnifiedTxBuilder {
             }
         }
 
-        // Add change output if significant
-        let min_change = self.calculate_min_utxo(50, &params); // ~50 bytes for simple output
-        if change_lovelace >= min_change {
-            let mut change_output = PlutusOutput::new(
-                self.wallet.payment_address_bytes(self.change_address_index)?,
-                change_lovelace,
-            );
+        // Add change output
+        // IMPORTANT: If we have any native tokens in change, we MUST create a change output
+        let min_change = self.calculate_min_utxo(60, params);
+        let actual_change_amount;
 
-            // Add change assets if any
-            if !change_assets.is_empty() {
-                let change_asset_data: Vec<AssetData> = change_assets
+        // Check if we have change assets (native tokens)
+        let has_change_assets = !change_assets.is_empty();
+
+        if has_change_assets || change_lovelace >= min_change {
+            // Convert change_assets to AssetData
+            let change_asset_data: Vec<AssetData> = if has_change_assets {
+                change_assets
                     .iter()
                     .filter_map(|(key, amount)| {
                         let parts: Vec<&str> = key.split(':').collect();
@@ -834,26 +971,67 @@ impl UnifiedTxBuilder {
                             None
                         }
                     })
-                    .collect();
+                    .collect()
+            } else {
+                Vec::new()
+            };
 
-                change_output = PlutusOutput::with_assets(
-                    self.wallet.payment_address_bytes(self.change_address_index)?,
+            // Calculate minimum ADA needed for this output
+            // Outputs with native tokens need more ADA
+            let min_utxo_for_output = if has_change_assets {
+                // Rough estimate: 1.5 ADA + 0.15 ADA per token type
+                let base = 1_500_000u64;
+                let per_token = 150_000u64 * change_asset_data.len() as u64;
+                base + per_token
+            } else {
+                min_change
+            };
+
+            // Ensure we have enough ADA in the change output
+            let change_ada = if change_lovelace < min_utxo_for_output {
+                tracing::warn!(
+                    "Change {} lovelace below minimum {} for output with {} assets, using minimum",
                     change_lovelace,
-                    change_asset_data,
+                    min_utxo_for_output,
+                    change_asset_data.len()
                 );
-            }
+                min_utxo_for_output
+            } else {
+                change_lovelace
+            };
+
+            let change_output = if has_change_assets {
+                PlutusOutput::with_assets(
+                    self.wallet.payment_address_bytes(self.change_address_index)?,
+                    change_ada,
+                    change_asset_data,
+                )
+            } else {
+                PlutusOutput::new(
+                    self.wallet.payment_address_bytes(self.change_address_index)?,
+                    change_ada,
+                )
+            };
 
             builder.add_output(&change_output)?;
-        } else if change_lovelace > 0 {
-            tracing::warn!(
-                "Change {} lovelace below minimum {}, adding to fee",
-                change_lovelace,
-                min_change
-            );
+            actual_change_amount = change_ada;
+        } else {
+            if change_lovelace > 0 {
+                tracing::debug!(
+                    "Change {} lovelace below minimum {}, adding to fee",
+                    change_lovelace,
+                    min_change
+                );
+            }
+            actual_change_amount = 0;
         }
 
-        // Add collateral if we have script inputs
-        if !self.script_inputs.is_empty() || !self.mints.is_empty() {
+        // Add collateral if we have Plutus scripts (script inputs or Plutus minting policies)
+        // Native script mints don't require collateral
+        let has_plutus_scripts = !self.script_inputs.is_empty()
+            || self.mints.iter().any(|m| m.policy_script.is_some());
+
+        if has_plutus_scripts {
             if let Some(ref collateral) = self.collateral {
                 for utxo in collateral {
                     builder.add_collateral(utxo)?;
@@ -867,8 +1045,11 @@ impl UnifiedTxBuilder {
         for mint in &self.mints {
             builder.mint_asset(mint.policy_id, mint.asset_name.clone(), mint.amount)?;
 
-            if let Some(ref _script) = mint.policy_script {
-                // Add script and redeemer for Plutus policies
+            if let Some(ref script) = mint.policy_script {
+                // Add Plutus script to witness set
+                builder.add_plutus_script(script.clone())?;
+
+                // Add redeemer for Plutus policies
                 if let Some(ref redeemer) = mint.redeemer {
                     builder.add_mint_redeemer(mint.policy_id, redeemer)?;
                 }
@@ -878,7 +1059,7 @@ impl UnifiedTxBuilder {
         }
 
         // Set transaction parameters
-        builder.set_fee(estimated_fee).set_network_id();
+        builder.set_fee(fee).set_network_id();
 
         if let Some(ttl) = self.ttl {
             builder.set_ttl(ttl);
@@ -897,24 +1078,7 @@ impl UnifiedTxBuilder {
         // Build the transaction
         let (tx_bytes, tx_hash) = builder.build()?;
 
-        tracing::info!(
-            "Built transaction: {} bytes, hash={}",
-            tx_bytes.len(),
-            hex::encode(&tx_hash)
-        );
-
-        Ok(BuiltTransaction {
-            tx_bytes,
-            tx_hash,
-            fee_paid: estimated_fee,
-            inputs_used: selected_utxos,
-            change_amount: if change_lovelace >= min_change {
-                change_lovelace
-            } else {
-                0
-            },
-            output_count: self.outputs.len() + if change_lovelace >= min_change { 1 } else { 0 },
-        })
+        Ok((tx_bytes, tx_hash, actual_change_amount))
     }
 
     /// Sign a pre-built transaction (for airgap workflow)
@@ -974,7 +1138,10 @@ impl UnifiedTxBuilder {
     /// Build and sign the transaction
     ///
     /// Returns signed transaction bytes ready for submission.
-    pub async fn build_and_sign(&mut self) -> Result<Vec<u8>> {
+    ///
+    /// # Arguments
+    /// * `additional_keys` - Optional additional signing keys (e.g., for native script minting)
+    pub async fn build_and_sign_with_keys(&mut self, additional_keys: Vec<pallas_wallet::PrivateKey>) -> Result<Vec<u8>> {
         let built_tx = self.build().await?;
 
         tracing::debug!("Determining which address indices were used");
@@ -1008,6 +1175,13 @@ impl UnifiedTxBuilder {
         for index in used_indices {
             signing_keys.push(self.wallet.payment_signing_key(index)?);
         }
+
+        // Add any additional signing keys (e.g., for native script minting)
+        signing_keys.extend(additional_keys);
+
+        tracing::debug!("Total signing keys: {} (wallet keys + additional)",
+            signing_keys.len()
+        );
 
         // Rebuild the transaction with signing
         use crate::wallet::tx_builder::PlutusTransactionBuilder;
@@ -1077,8 +1251,11 @@ impl UnifiedTxBuilder {
             builder.add_output(&change_output)?;
         }
 
-        // Re-add collateral if present
-        if !self.script_inputs.is_empty() || !self.mints.is_empty() {
+        // Re-add collateral if we have Plutus scripts (not needed for native scripts)
+        let has_plutus_scripts = !self.script_inputs.is_empty()
+            || self.mints.iter().any(|m| m.policy_script.is_some());
+
+        if has_plutus_scripts {
             if let Some(ref collateral) = self.collateral {
                 for utxo in collateral {
                     builder.add_collateral(utxo)?;
@@ -1090,7 +1267,10 @@ impl UnifiedTxBuilder {
         for mint in &self.mints {
             builder.mint_asset(mint.policy_id, mint.asset_name.clone(), mint.amount)?;
 
-            if let Some(ref _script) = mint.policy_script {
+            if let Some(ref script) = mint.policy_script {
+                // Add Plutus script to witness set
+                builder.add_plutus_script(script.clone())?;
+
                 if let Some(ref redeemer) = mint.redeemer {
                     builder.add_mint_redeemer(mint.policy_id, redeemer)?;
                 }
@@ -1122,6 +1302,15 @@ impl UnifiedTxBuilder {
         tracing::info!("Transaction signed successfully");
 
         Ok(signed_tx)
+    }
+
+    /// Build and sign the transaction (convenience method)
+    ///
+    /// Returns signed transaction bytes ready for submission.
+    /// For transactions requiring additional keys (e.g., native script minting),
+    /// use `build_and_sign_with_keys` instead.
+    pub async fn build_and_sign(&mut self) -> Result<Vec<u8>> {
+        self.build_and_sign_with_keys(Vec::new()).await
     }
 
     /// Build, sign, and submit the transaction
