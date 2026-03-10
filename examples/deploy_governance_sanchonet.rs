@@ -89,7 +89,7 @@ async fn deploy_contract(
     builder
         .query_utxos().await?
         .pay_to_script_with_assets(
-            contract_address_bytes,
+            contract_address_bytes.clone(),
             deployment_lovelace,
             Vec::new(),
             datum_option,
@@ -100,34 +100,32 @@ async fn deploy_contract(
     // Build and sign the transaction
     let signed_tx_bytes = builder.build_and_sign().await?;
 
-    // Write to file and submit with cardano-cli
-    let tx_file = format!("/tmp/deploy-{}.signed", hex::encode(&contract_address_bytes[..8]));
-    std::fs::write(&tx_file, &signed_tx_bytes)?;
-
-    println!("  Submitting with cardano-cli...");
-    let socket_path = "/home/sam/work/iohk/midnight-playground/.run/sanchonet/cardano-node/node.socket";
-
-    let output = std::process::Command::new("cardano-cli")
-        .args(&[
-            "transaction", "submit",
-            "--tx-file", &tx_file,
-            "--socket-path", socket_path,
-        ])
-        .output()?;
-
-    // Clean up temp file
-    let _ = std::fs::remove_file(&tx_file);
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("cardano-cli submission failed: {}", stderr).into());
-    }
-
     // Calculate tx hash
     use pallas_crypto::hash::Hasher;
     let tx_hash = Hasher::<256>::hash(&signed_tx_bytes);
 
-    println!("  ✅ Deployed! TX Hash: {}", hex::encode(&tx_hash));
+    // Save signed transaction in cardano-cli TextEnvelope format
+    let tx_file = format!("/tmp/deploy-{}.signed", contract_name.replace(' ', "-"));
+
+    // Create TextEnvelope JSON format
+    let text_envelope = serde_json::json!({
+        "type": "Tx ConwayEra",
+        "description": "Ledger Cddl Format",
+        "cborHex": hex::encode(&signed_tx_bytes)
+    });
+
+    std::fs::write(&tx_file, serde_json::to_string_pretty(&text_envelope)?)?;
+
+    println!("  Transaction built and signed successfully!");
+    println!("  TX Hash: {}", hex::encode(&tx_hash));
+    println!("  Signed transaction saved to: {}", tx_file);
+    println!("  ");
+    println!("  To submit manually, run:");
+    println!("    cardano-cli transaction submit \\");
+    println!("      --tx-file {} \\", tx_file);
+    println!("      --socket-path /home/sam/work/iohk/midnight-playground/.run/sanchonet/cardano-node/node.socket");
+    println!("  ");
+    println!("  ✅ Transaction ready for submission!");
 
     Ok(tx_hash.to_vec())
 }
