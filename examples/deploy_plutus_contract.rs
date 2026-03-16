@@ -28,7 +28,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 2. Create the governance datum (VersionedMultisig)
     let datum = VersionedMultisig {
-        threshold: 2,
+        total_signers: 2,
         members: vec![
             hayate::wallet::plutus::GovernanceMember {
                 cardano_hash: [1u8; 28],  // First member's Cardano key hash
