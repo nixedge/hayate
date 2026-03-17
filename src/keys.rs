@@ -8,8 +8,7 @@ use pallas_crypto::hash::Hash;
 use pallas_addresses::{Network, ShelleyAddress, ShelleyDelegationPart, ShelleyPaymentPart};
 use pallas_traverse::ComputeHash;
 use cryptoxide::{hmac::Hmac, pbkdf2::pbkdf2, sha2::Sha512};
-use minicbor::{Encode, Encoder, encode};
-use bip39::rand_core::OsRng;
+use pallas_codec::minicbor::{Encode, Encoder, encode, to_vec};
 use bip39::Mnemonic;
 use ed25519_bip32::{XPrv, XPub, XPRV_SIZE, XPUB_SIZE};
 use anyhow::{Result, Context};
@@ -25,19 +24,39 @@ pub enum FlexibleSecretKey {
 pub type KeyPairAndAddress = (FlexibleSecretKey, PublicKey, ShelleyAddress);
 
 /// Generate a random Cardano key pair and address
+#[allow(dead_code)]
 pub fn generate_cardano_key_and_address() -> KeyPairAndAddress {
-    let rng = OsRng;
-    
-    let sk = SecretKey::new(rng);
-    let vk = sk.public_key();
-    
-    let addr = ShelleyAddress::new(
-        Network::Mainnet,
-        ShelleyPaymentPart::key_hash(vk.compute_hash()),
-        ShelleyDelegationPart::Null,
-    );
-    
-    (FlexibleSecretKey::Standard(sk), vk, addr)
+    use rand::RngCore;
+    use rand::rngs::OsRng;
+
+    // Generate random entropy for BIP39-style key derivation
+    let mut entropy = [0u8; 32];
+    OsRng.fill_bytes(&mut entropy);
+
+    // Use PBKDF2 to derive root key from entropy (similar to BIP39)
+    let mut pbkdf2_result = [0; XPRV_SIZE];
+    const ITER: u32 = 4096;
+    let mut mac = Hmac::new(Sha512::new(), "".as_bytes());
+    pbkdf2(&mut mac, &entropy, ITER, &mut pbkdf2_result);
+    let xprv = XPrv::normalize_bytes_force3rd(pbkdf2_result);
+
+    // Derive a simple path (no hardening needed for tests)
+    let derived_xprv = &xprv
+        .derive(ed25519_bip32::DerivationScheme::V2, 0)
+        .extended_secret_key();
+
+    unsafe {
+        let sk = SecretKeyExtended::from_bytes_unchecked(*derived_xprv);
+        let vk = sk.public_key();
+
+        let addr = ShelleyAddress::new(
+            Network::Mainnet,
+            ShelleyPaymentPart::key_hash(vk.compute_hash()),
+            ShelleyDelegationPart::Null,
+        );
+
+        (FlexibleSecretKey::Extended(sk), vk, addr)
+    }
 }
 
 /// Harden a BIP44 index
@@ -332,7 +351,7 @@ pub fn cip8_sign(kp: &KeyPairAndAddress, message: &str) -> (String, String) {
     let prot_header = CoseProtHeader {
         address: kp.2.to_vec(),
     };
-    let cose_prot_cbor = minicbor::to_vec(&prot_header).unwrap();
+    let cose_prot_cbor = to_vec(&prot_header).unwrap();
     
     let to_sign = CoseSignData {
         label: "Signature1",
@@ -340,7 +359,7 @@ pub fn cip8_sign(kp: &KeyPairAndAddress, message: &str) -> (String, String) {
         external_aad: b"",
         payload: message.as_bytes(),
     };
-    let to_sign_cbor = minicbor::to_vec(&to_sign).unwrap();
+    let to_sign_cbor = to_vec(&to_sign).unwrap();
     
     let signature = match &kp.0 {
         FlexibleSecretKey::Standard(sk) => sk.sign(&to_sign_cbor),
@@ -352,7 +371,7 @@ pub fn cip8_sign(kp: &KeyPairAndAddress, message: &str) -> (String, String) {
         payload: message.as_bytes(),
         signature: signature.as_ref(),
     };
-    let cose_sign1_cbor = minicbor::to_vec(&cose_struct).unwrap();
+    let cose_sign1_cbor = to_vec(&cose_struct).unwrap();
 
     (hex::encode(&cose_sign1_cbor), pubkey)
 }
@@ -364,8 +383,8 @@ mod tests {
     #[test]
     fn test_generate_random_key() {
         let (sk, _pk, _addr) = generate_cardano_key_and_address();
-        // Should generate valid key pair and address
-        assert!(matches!(sk, FlexibleSecretKey::Standard(_)));
+        // Should generate valid key pair and address (Extended key from random bytes)
+        assert!(matches!(sk, FlexibleSecretKey::Extended(_)));
     }
     
     #[test]

@@ -53,7 +53,20 @@ impl WalletFilter {
     pub fn is_our_address(&self, address_bytes: &[u8]) -> bool {
         // First check if this exact address is being tracked
         if self.tracked_addresses.contains(address_bytes) {
+            tracing::debug!("✓ Address matched in tracked_addresses: {}", hex::encode(address_bytes));
             return true;
+        }
+
+        // Debug: log if we're checking a script address
+        if !self.tracked_addresses.is_empty() {
+            use pallas_addresses::Address;
+            if let Ok(Address::Shelley(addr)) = Address::from_bytes(address_bytes) {
+                if matches!(addr.payment(), pallas_addresses::ShelleyPaymentPart::Script(_)) {
+                    tracing::debug!("✗ Script address not in tracked set: {}", hex::encode(address_bytes));
+                    tracing::debug!("  Tracked addresses: {:?}",
+                        self.tracked_addresses.iter().map(|a| hex::encode(a)).collect::<Vec<_>>());
+                }
+            }
         }
 
         // For now, if we have no filters, track everything
@@ -632,13 +645,13 @@ impl BlockProcessor {
         // Midnight-node needs RAW CBOR bytes (hex-encoded), not decoded JSON
         let (datum_hash_hex, inline_datum_hex) = match output.datum() {
             Some(datum_option) => {
-                use pallas_primitives::conway::MintedDatumOption;
+                use pallas_primitives::conway::DatumOption;
                 match datum_option {
-                    MintedDatumOption::Hash(hash) => {
+                    DatumOption::Hash(hash) => {
                         // Datum hash only (datum stored separately on-chain)
                         (Some(hex::encode(hash)), None)
                     }
-                    MintedDatumOption::Data(inline_datum) => {
+                    DatumOption::Data(inline_datum) => {
                         // Inline datum (Babbage+ era) - extract raw CBOR bytes
                         let datum_bytes = inline_datum.raw_cbor().to_vec();
 

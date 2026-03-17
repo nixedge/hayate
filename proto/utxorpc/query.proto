@@ -26,6 +26,9 @@ service QueryService {
 
   // Get a block by its hash
   rpc GetBlockByHash(GetBlockByHashRequest) returns (GetBlockByHashResponse);
+
+  // Add an address to track and rollback N blocks for testing
+  rpc AddAddressAndRollback(AddAddressAndRollbackRequest) returns (AddAddressAndRollbackResponse);
 }
 
 message ReadUtxosRequest {
@@ -88,6 +91,11 @@ message ReadParamsResponse {
 
     // Metadata
     uint64 epoch = 14;           // Epoch these params are valid for
+
+    // Cost models for script integrity hash calculation
+    repeated int64 plutus_v1_cost_model = 15;  // PlutusV1 cost model (166 elements)
+    repeated int64 plutus_v2_cost_model = 16;  // PlutusV2 cost model (175 elements)
+    repeated int64 plutus_v3_cost_model = 17;  // PlutusV3 cost model (if available)
   }
 
   ProtocolParams protocol_params = 3;  // Current protocol parameters
@@ -179,4 +187,18 @@ message GetBlockByHashResponse {
   uint64 slot = 2;
   bytes hash = 3;
   uint64 timestamp = 4;  // Unix milliseconds
+}
+
+// Add address and rollback request
+message AddAddressAndRollbackRequest {
+  string address = 1;  // Bech32 address to track
+  uint64 rollback_blocks = 2;  // Number of blocks to rollback (default 100)
+}
+
+// Add address and rollback response
+message AddAddressAndRollbackResponse {
+  bool success = 1;
+  string message = 2;  // Status message
+  uint64 rolled_back_to_slot = 3;  // Slot we rolled back to
+  uint64 blocks_rolled_back = 4;  // Actual number of blocks rolled back
 }

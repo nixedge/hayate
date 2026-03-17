@@ -368,27 +368,185 @@ impl PlutusTransactionBuilder {
         Ok((built_tx.tx_bytes.0, built_tx.tx_hash.0.to_vec()))
     }
 
-    /// Build and sign the transaction
+    /// Build and sign the transaction using Ed25519 extended secret keys
     ///
-    /// This is a convenience method that builds the transaction and adds signatures
+    /// This builds the transaction, extracts the body, signs it with the provided keys,
+    /// and reconstructs a complete signed transaction ready for submission.
+    ///
+    /// # Arguments
+    /// * `signing_keys` - Ed25519 extended secret keys for signing
+    ///
+    /// # Returns
+    /// Complete signed transaction CBOR bytes
     pub fn build_and_sign(
         &self,
-        signing_keys: Vec<pallas_wallet::PrivateKey>,
+        signing_keys: Vec<pallas_crypto::key::ed25519::SecretKeyExtended>,
     ) -> TxBuilderResult<Vec<u8>> {
-        let mut built_tx = self
+        use pallas_codec::minicbor::{Decoder, Encoder};
+        use pallas_crypto::hash::Hasher;
+
+        // Build unsigned transaction
+        let built_tx = self
             .staging_tx
             .clone()
             .build_conway_raw()
             .map_err(|e| TxBuilderError::BuildError(e.to_string()))?;
 
-        // Add signatures
-        for key in signing_keys {
-            built_tx = built_tx
-                .sign(key)
-                .map_err(|e| TxBuilderError::BuildError(e.to_string()))?;
+        let tx_bytes = &built_tx.tx_bytes.0;
+
+        // Decode the transaction array: [body, witness_set, valid, auxiliary?]
+        let mut decoder = Decoder::new(tx_bytes);
+        let array_len = decoder
+            .array()
+            .map_err(|e| TxBuilderError::CborEncode(format!("Failed to decode tx array: {}", e)))?;
+
+        if array_len != Some(4) && array_len != Some(3) {
+            return Err(TxBuilderError::BuildError(format!(
+                "Invalid transaction structure: expected 3 or 4 elements, got {:?}",
+                array_len
+            )));
         }
 
-        Ok(built_tx.tx_bytes.0)
+        // 1. Extract transaction body (as raw bytes)
+        let body_start = decoder.position();
+        decoder
+            .skip()
+            .map_err(|e| TxBuilderError::CborEncode(format!("Failed to skip body: {}", e)))?;
+        let body_end = decoder.position();
+        let body_bytes = &tx_bytes[body_start..body_end];
+
+        // 2. Extract witness set (we'll rebuild this with our signatures)
+        let witness_start = decoder.position();
+        decoder
+            .skip()
+            .map_err(|e| TxBuilderError::CborEncode(format!("Failed to skip witness set: {}", e)))?;
+        let witness_end = decoder.position();
+        let _witness_bytes = &tx_bytes[witness_start..witness_end];
+
+        // 3. Extract validity flag
+        let valid = decoder
+            .bool()
+            .map_err(|e| TxBuilderError::CborEncode(format!("Failed to decode validity: {}", e)))?;
+
+        // 4. Extract auxiliary data (optional)
+        let aux_start = decoder.position();
+        let auxiliary_bytes = if aux_start < tx_bytes.len() {
+            decoder
+                .skip()
+                .map_err(|e| TxBuilderError::CborEncode(format!("Failed to skip auxiliary: {}", e)))?;
+            let aux_end = decoder.position();
+            Some(&tx_bytes[aux_start..aux_end])
+        } else {
+            None
+        };
+
+        // Hash the transaction body with Blake2b-256
+        let tx_hash = Hasher::<256>::hash(body_bytes);
+
+        // Sign the hash with each key
+        let mut vkey_witnesses = Vec::new();
+        for key in &signing_keys {
+            let signature = key.sign(tx_hash.as_ref());
+            let public_key = key.public_key();
+
+            // Store as (vkey_bytes, signature_bytes)
+            vkey_witnesses.push((
+                public_key.as_ref().to_vec(),
+                signature.as_ref().to_vec(),
+            ));
+        }
+
+        // Rebuild the transaction with signatures
+        let mut buffer = Vec::new();
+        let mut encoder = Encoder::new(&mut buffer);
+
+        // Transaction array (4 elements for Conway)
+        encoder
+            .array(4)
+            .map_err(|e| TxBuilderError::CborEncode(format!("Failed to encode tx array: {}", e)))?;
+
+        // 1. Transaction body (raw bytes)
+        std::io::Write::write_all(encoder.writer_mut(), body_bytes)
+            .map_err(|e| TxBuilderError::CborEncode(format!("Failed to write body: {}", e)))?;
+
+        // 2. Witness set with vkey witnesses
+        // We need to decode the original witness set to preserve scripts, datums, redeemers
+        let mut witness_decoder = Decoder::new(_witness_bytes);
+        let witness_map_len = witness_decoder
+            .map()
+            .map_err(|e| TxBuilderError::CborEncode(format!("Failed to decode witness map: {}", e)))?;
+
+        // Collect existing witness fields (excluding vkeywitness which is field 0)
+        let mut other_fields = std::collections::BTreeMap::new();
+        if let Some(num_fields) = witness_map_len {
+            for _ in 0..num_fields {
+                let field_key = witness_decoder
+                    .u64()
+                    .map_err(|e| TxBuilderError::CborEncode(format!("Failed to read witness key: {}", e)))?;
+                let value_start = witness_decoder.position();
+                witness_decoder
+                    .skip()
+                    .map_err(|e| TxBuilderError::CborEncode(format!("Failed to skip witness value: {}", e)))?;
+                let value_end = witness_decoder.position();
+
+                // Skip vkeywitness (field 0) - we'll add our own
+                if field_key != 0 {
+                    other_fields.insert(field_key, &_witness_bytes[value_start..value_end]);
+                }
+            }
+        }
+
+        // Build new witness set map
+        let num_witness_fields = 1 + other_fields.len(); // vkeywitness + others
+        encoder
+            .map(num_witness_fields as u64)
+            .map_err(|e| TxBuilderError::CborEncode(format!("Failed to encode witness map: {}", e)))?;
+
+        // Field 0: vkeywitness array
+        encoder
+            .u64(0)
+            .map_err(|e| TxBuilderError::CborEncode(format!("Failed to encode vkey field key: {}", e)))?;
+        encoder
+            .array(vkey_witnesses.len() as u64)
+            .map_err(|e| TxBuilderError::CborEncode(format!("Failed to encode vkey array: {}", e)))?;
+
+        for (vkey, sig) in vkey_witnesses {
+            encoder
+                .array(2)
+                .map_err(|e| TxBuilderError::CborEncode(format!("Failed to encode witness pair: {}", e)))?;
+            encoder
+                .bytes(&vkey)
+                .map_err(|e| TxBuilderError::CborEncode(format!("Failed to encode vkey: {}", e)))?;
+            encoder
+                .bytes(&sig)
+                .map_err(|e| TxBuilderError::CborEncode(format!("Failed to encode signature: {}", e)))?;
+        }
+
+        // Add other witness fields (scripts, datums, redeemers, etc.)
+        for (field_key, field_bytes) in other_fields {
+            encoder
+                .u64(field_key)
+                .map_err(|e| TxBuilderError::CborEncode(format!("Failed to encode field key: {}", e)))?;
+            std::io::Write::write_all(encoder.writer_mut(), field_bytes)
+                .map_err(|e| TxBuilderError::CborEncode(format!("Failed to write field: {}", e)))?;
+        }
+
+        // 3. Validity flag
+        encoder
+            .bool(valid)
+            .map_err(|e| TxBuilderError::CborEncode(format!("Failed to encode validity: {}", e)))?;
+
+        // 4. Auxiliary data (or null)
+        if let Some(aux_bytes) = auxiliary_bytes {
+            std::io::Write::write_all(encoder.writer_mut(), aux_bytes)
+                .map_err(|e| TxBuilderError::CborEncode(format!("Failed to write auxiliary: {}", e)))?;
+        } else {
+            encoder
+                .null()
+                .map_err(|e| TxBuilderError::CborEncode(format!("Failed to encode null auxiliary: {}", e)))?;
+        }
+
+        Ok(buffer)
     }
 
     /// Get the underlying StagingTransaction for advanced usage
@@ -522,5 +680,50 @@ mod tests {
         builder_mainnet.set_network_id();
 
         assert_eq!(builder_mainnet.staging_transaction().network_id, Some(1));
+    }
+
+    #[test]
+    fn test_build_and_sign() {
+        use pallas_crypto::key::ed25519::SecretKeyExtended;
+
+        let mut builder = PlutusTransactionBuilder::new(Network::Testnet, vec![1u8; 57]);
+
+        // Add a simple input
+        let utxo = UtxoData {
+            tx_hash: vec![0u8; 32],
+            output_index: 0,
+            address: vec![1u8; 57],
+            coin: 10_000_000,
+            assets: Vec::new(),
+            datum_hash: None,
+            datum: None,
+        };
+
+        let input = PlutusInput::regular(utxo);
+        builder.add_input(&input).unwrap();
+
+        // Add an output
+        let output = PlutusOutput::new(vec![1u8; 57], 5_000_000);
+        builder.add_output(&output).unwrap();
+
+        // Generate a test key (64 bytes for Ed25519 extended key)
+        let key_bytes = [42u8; 64];
+        let secret_key = unsafe {
+            SecretKeyExtended::from_bytes_unchecked(key_bytes)
+        };
+
+        // Build and sign
+        let result = builder.build_and_sign(vec![secret_key]);
+
+        // Should succeed
+        assert!(result.is_ok(), "build_and_sign failed: {:?}", result.err());
+
+        let signed_tx = result.unwrap();
+
+        // Signed transaction should have reasonable size (at least body + witness)
+        assert!(signed_tx.len() > 100, "Signed transaction too small: {} bytes", signed_tx.len());
+
+        // Transaction should start with CBOR array tag (0x84 for 4-element array)
+        assert_eq!(signed_tx[0], 0x84, "Transaction should be 4-element CBOR array");
     }
 }

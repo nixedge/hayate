@@ -53,16 +53,17 @@ thiserror = "1.0"
 anyhow = "1.0"
 
 # Cardano libraries
-pallas-network = "0.35.0"
-pallas-traverse = "0.35.0"
-pallas-crypto = "0.35.0"
-pallas-addresses = "0.35.0"
-pallas-configs = "0.35.0"
-pallas = "0.35.0"
-pallas-codec = "0.35.0"
-pallas-primitives = "0.35.0"
-pallas-txbuilder = "0.35.0"
-pallas-wallet = "0.35.0"
+pallas-network = "1.0.0-alpha.5"
+pallas-traverse = "1.0.0-alpha.5"
+pallas-crypto = "1.0.0-alpha.5"
+pallas-addresses = "1.0.0-alpha.5"
+pallas-configs = "1.0.0-alpha.5"
+pallas = "1.0.0-alpha.5"
+pallas-codec = "1.0.0-alpha.5"
+pallas-primitives = "1.0.0-alpha.5"
+pallas-txbuilder = "1.0.0-alpha.5"
+# Use aiken's uplc from crates.io (uses pallas 0.33)
+uplc = "1.1"
 
 # Crypto and key derivation
 bip39 = "2"
@@ -81,6 +82,9 @@ crc32fast = "1.4"
 # Exact arithmetic for rewards calculation
 num-rational = "0.4"
 num-traits = "0.2"
+
+# Date/time handling (for pallas-applying)
+chrono = "0.4"
 
 [build-dependencies]
 tonic-build = "0.12"

@@ -39,6 +39,9 @@
 
           # Tree formatter
           config.treefmt.build.wrapper
+
+          # Aiken smart contract compiler
+          inputs'.aiken.packages.default
         ];
 
         shellHook = ''
@@ -48,6 +51,7 @@
           echo "Cargo: $(cargo --version)"
           echo "Protoc: $(protoc --version)"
           echo "grpcurl: $(grpcurl --version 2>&1 | head -1)"
+          echo "Aiken: $(aiken --version 2>&1)"
           echo ""
           echo "Commands:"
           echo "  just --list              # Show all commands"

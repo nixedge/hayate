@@ -30,11 +30,26 @@ impl Network {
     }
 }
 
+/// Calculate Plutus script hash (28 bytes) using version-tagged hash
+///
+/// Cardano uses tagged hashes for Plutus scripts to prevent collisions:
+/// - PlutusV1: tag 1
+/// - PlutusV2: tag 2
+/// - PlutusV3: tag 3
+///
+/// This matches the pallas-txbuilder implementation
+pub fn script_hash_versioned(script_cbor: &[u8], version_tag: u8) -> [u8; 28] {
+    let hash: Hash<28> = Hasher::<224>::hash_tagged(script_cbor, version_tag);
+    let mut out = [0u8; 28];
+    out.copy_from_slice(hash.as_ref());
+    out
+}
+
 /// Calculate script hash (policy ID) from Plutus script CBOR using BLAKE2b-224
 ///
-/// The script hash is 28 bytes and serves as:
-/// - The payment credential in script addresses
-/// - The policy ID for minting policies
+/// DEPRECATED: This uses untagged hash which is incorrect for Plutus scripts.
+/// Use script_hash_versioned with the appropriate version tag instead.
+#[deprecated(note = "Use script_hash_versioned with version tag (1 for V1, 2 for V2, 3 for V3)")]
 pub fn script_hash(script_cbor: &[u8]) -> [u8; 28] {
     let hash: Hash<28> = Hasher::<224>::hash(script_cbor);
     let mut out = [0u8; 28];
@@ -50,6 +65,10 @@ pub fn script_hash(script_cbor: &[u8]) -> [u8; 28] {
 /// - No stake credential
 ///
 /// Total: 29 bytes
+///
+/// DEPRECATED: Use PlutusScript::address() which uses version-tagged hash
+#[deprecated(note = "Use PlutusScript::address() which uses version-tagged hash")]
+#[allow(deprecated)]
 pub fn script_address(script_cbor: &[u8], network: Network) -> PlutusResult<Vec<u8>> {
     if script_cbor.is_empty() {
         return Err(PlutusError::InvalidScript(
@@ -66,6 +85,10 @@ pub fn script_address(script_cbor: &[u8], network: Network) -> PlutusResult<Vec<
 }
 
 /// Verify a script hash matches the expected script
+///
+/// DEPRECATED: Use PlutusScript::verify_hash() which uses version-tagged hash
+#[deprecated(note = "Use PlutusScript::verify_hash() which uses version-tagged hash")]
+#[allow(deprecated)]
 pub fn verify_script_hash(script_cbor: &[u8], expected_hash: &[u8]) -> bool {
     if expected_hash.len() != 28 {
         return false;
@@ -82,19 +105,20 @@ mod tests {
     #[test]
     fn test_script_hash_length() {
         let script = vec![0x01, 0x02, 0x03, 0x04];
-        let hash = script_hash(&script);
+        let hash = script_hash_versioned(&script, 2); // V2 script
         assert_eq!(hash.len(), 28, "Script hash must be 28 bytes");
     }
 
     #[test]
     fn test_script_hash_deterministic() {
         let script = vec![0x01, 0x02, 0x03, 0x04];
-        let hash1 = script_hash(&script);
-        let hash2 = script_hash(&script);
+        let hash1 = script_hash_versioned(&script, 2); // V2 script
+        let hash2 = script_hash_versioned(&script, 2);
         assert_eq!(hash1, hash2, "Script hash must be deterministic");
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_script_address_testnet() {
         let script = vec![0x01, 0x02, 0x03, 0x04];
         let addr = script_address(&script, Network::Testnet).unwrap();
@@ -104,6 +128,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_script_address_mainnet() {
         let script = vec![0x01, 0x02, 0x03, 0x04];
         let addr = script_address(&script, Network::Mainnet).unwrap();
@@ -113,6 +138,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_verify_script_hash() {
         let script = vec![0x01, 0x02, 0x03, 0x04];
         let hash = script_hash(&script);
@@ -124,6 +150,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_verify_script_hash_mismatch() {
         let script = vec![0x01, 0x02, 0x03, 0x04];
         let wrong_hash = [0u8; 28];
@@ -135,6 +162,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_empty_script() {
         let result = script_address(&[], Network::Testnet);
         assert!(result.is_err(), "Empty script should return error");
@@ -153,8 +181,8 @@ mod tests {
     fn test_different_scripts_different_hashes() {
         let script1 = vec![0x01, 0x02, 0x03, 0x04];
         let script2 = vec![0x05, 0x06, 0x07, 0x08];
-        let hash1 = script_hash(&script1);
-        let hash2 = script_hash(&script2);
+        let hash1 = script_hash_versioned(&script1, 2);
+        let hash2 = script_hash_versioned(&script2, 2);
 
         assert_ne!(hash1, hash2, "Different scripts should have different hashes");
     }

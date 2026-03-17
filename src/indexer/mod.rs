@@ -4,6 +4,7 @@
 
 pub mod block_processor;
 pub mod storage_manager;
+pub mod block_walker;
 
 use cardano_lsm::{LsmTree, LsmConfig, MonoidalLsmTree, IncrementalMerkleTree, Key, Value, PersistentSnapshot};
 use std::path::PathBuf;
@@ -720,12 +721,15 @@ pub struct HayateIndexer {
     pub tracked_addresses: RwLock<Vec<String>>,
     pub gap_limit: u32,
     block_updates: broadcast::Sender<BlockUpdate>,
+    restart_signal: broadcast::Sender<u64>, // Signal to restart chain sync from specific slot
 }
 
 impl HayateIndexer {
     pub fn new(_base_path: PathBuf, gap_limit: u32) -> Result<Self> {
         // Create broadcast channel with capacity for 1000 block updates
         let (block_updates, _) = broadcast::channel(1000);
+        // Create broadcast channel for restart signals
+        let (restart_signal, _) = broadcast::channel(10);
 
         Ok(Self {
             networks: RwLock::new(HashMap::new()),
@@ -733,6 +737,7 @@ impl HayateIndexer {
             tracked_addresses: RwLock::new(Vec::new()),
             gap_limit,
             block_updates,
+            restart_signal,
         })
     }
 
@@ -746,7 +751,18 @@ impl HayateIndexer {
         // Ignore send errors (no subscribers is okay)
         let _ = self.block_updates.send(update);
     }
-    
+
+    /// Subscribe to chain sync restart signals
+    pub fn subscribe_restart(&self) -> broadcast::Receiver<u64> {
+        self.restart_signal.subscribe()
+    }
+
+    /// Signal chain sync to restart from a specific slot
+    pub fn signal_restart(&self, slot: u64) {
+        tracing::info!("📢 Signaling chain sync to restart from slot {}", slot);
+        let _ = self.restart_signal.send(slot);
+    }
+
     pub async fn add_network(&self, network: Network, base_path: PathBuf) -> Result<()> {
         let storage = NetworkStorage::open(base_path, network.clone())?;
 

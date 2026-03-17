@@ -165,6 +165,21 @@ impl WalletUtxorpcClient {
                 pool_deposit: proto_params.pool_deposit,
                 min_pool_cost: proto_params.min_pool_cost,
                 epoch: proto_params.epoch,
+                plutus_v1_cost_model: if proto_params.plutus_v1_cost_model.is_empty() {
+                    None
+                } else {
+                    Some(proto_params.plutus_v1_cost_model)
+                },
+                plutus_v2_cost_model: if proto_params.plutus_v2_cost_model.is_empty() {
+                    None
+                } else {
+                    Some(proto_params.plutus_v2_cost_model)
+                },
+                plutus_v3_cost_model: if proto_params.plutus_v3_cost_model.is_empty() {
+                    None
+                } else {
+                    Some(proto_params.plutus_v3_cost_model)
+                },
             }))
         } else {
             Ok(None)

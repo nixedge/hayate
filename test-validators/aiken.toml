@@ -1,0 +1,18 @@
+name = "hayate/test-validators"
+version = "0.0.0"
+compiler = "v1.1.21"
+plutus = "v3"
+license = "Apache-2.0"
+description = "Aiken contracts for project 'hayate/test-validators'"
+
+[repository]
+user = "hayate"
+project = "test-validators"
+platform = "github"
+
+[[dependencies]]
+name = "aiken-lang/stdlib"
+version = "v2"
+source = "github"
+
+[config]

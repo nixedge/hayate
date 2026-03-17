@@ -6,7 +6,6 @@
 
 use pallas_network::facades::NodeClient;
 use pallas_network::miniprotocols::chainsync::NextResponse;
-use pallas_network::miniprotocols::Point;
 use pallas_traverse::MultiEraBlock;
 
 #[tokio::main]

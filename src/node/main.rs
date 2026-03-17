@@ -330,13 +330,13 @@ async fn process_block_simple(
             // Parse datum and datum hash
             let (datum_hash, datum) = match output.datum() {
                 Some(datum_option) => {
-                    use pallas_primitives::conway::MintedDatumOption;
+                    use pallas_primitives::conway::DatumOption;
                     match datum_option {
-                        MintedDatumOption::Hash(hash) => {
+                        DatumOption::Hash(hash) => {
                             // Datum hash only (datum is stored separately on-chain)
                             (Some(hash.to_vec()), None)
                         }
-                        MintedDatumOption::Data(inline_datum) => {
+                        DatumOption::Data(inline_datum) => {
                             // Inline datum (post-Babbage)
                             
                             

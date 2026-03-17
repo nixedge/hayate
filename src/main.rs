@@ -110,18 +110,26 @@ async fn run_chain_sync(
 
     // Add tracked addresses to processor
     let tracked_addresses = indexer.tracked_addresses.read().await.clone();
-    for address_bech32 in &tracked_addresses {
+    for address_str in &tracked_addresses {
         use pallas_addresses::Address;
-        match Address::from_bech32(address_bech32) {
-            Ok(addr) => {
-                let address_bytes = addr.to_vec();
-                info!("Adding tracked address: {}", address_bech32);
-                processor.add_tracked_address(address_bytes);
+
+        // Try bech32 first, then hex
+        let address_bytes = match Address::from_bech32(address_str) {
+            Ok(addr) => addr.to_vec(),
+            Err(_) => {
+                // Try parsing as hex
+                match hex::decode(address_str) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        tracing::warn!("Failed to parse address {} (not bech32 or hex): {}", address_str, e);
+                        continue;
+                    }
+                }
             }
-            Err(e) => {
-                tracing::warn!("Failed to parse address {}: {}", address_bech32, e);
-            }
-        }
+        };
+
+        info!("Adding tracked address: {}", address_str);
+        processor.add_tracked_address(address_bytes);
     }
 
     if !tokens.is_empty() {
@@ -130,7 +138,10 @@ async fn run_chain_sync(
 
     info!("🔄 Starting block processing...");
 
-    // Process blocks - loop until shutdown signal
+    // Subscribe to restart signals
+    let mut restart_rx = indexer.subscribe_restart();
+
+    // Process blocks - loop until shutdown signal or restart signal
     // Handle both SIGINT (Ctrl+C) and SIGTERM (systemd/docker stop)
     let mut shutdown = Box::pin(async {
         let ctrl_c = tokio::signal::ctrl_c();
@@ -158,6 +169,19 @@ async fn run_chain_sync(
             _ = &mut shutdown => {
                 info!("Shutting down gracefully...");
                 break Ok(());
+            }
+            restart_slot = restart_rx.recv() => {
+                match restart_slot {
+                    Ok(slot) => {
+                        info!("🔄 Restart signal received! Rewinding to slot {}", slot);
+                        // Break out and restart the chain sync from the new slot
+                        // We'll use a special error to signal restart
+                        break Err(anyhow::anyhow!("RESTART:{}", slot));
+                    }
+                    Err(e) => {
+                        tracing::warn!("Restart channel error: {}", e);
+                    }
+                }
             }
             next_result = async {
                 // Check agency and call appropriate method
@@ -243,18 +267,27 @@ async fn run_chain_sync(
         }
     };
 
-    // Save tips before exiting (whether shutdown, error, or normal exit)
-    info!("💾 Saving final chain tips...");
-    processor.save_current_tips().await?;
+    // Check if this is a restart - if so, skip final tip save to preserve the rewound tip
+    let is_restart = result.as_ref().err()
+        .map(|e| e.to_string().starts_with("RESTART:"))
+        .unwrap_or(false);
 
-    // Create final snapshot before exit for minimal data loss
-    info!("📸 Creating final snapshot before shutdown...");
-    let current_slot = processor.current_slot;
-    if let Err(e) = processor.create_final_snapshot().await {
-        tracing::error!("Failed to create final snapshot: {}", e);
-        // Continue with shutdown even if snapshot fails
+    if !is_restart {
+        // Save tips before exiting (whether shutdown, error, or normal exit)
+        info!("💾 Saving final chain tips...");
+        processor.save_current_tips().await?;
+
+        // Create final snapshot before exit for minimal data loss
+        info!("📸 Creating final snapshot before shutdown...");
+        let current_slot = processor.current_slot;
+        if let Err(e) = processor.create_final_snapshot().await {
+            tracing::error!("Failed to create final snapshot: {}", e);
+            // Continue with shutdown even if snapshot fails
+        } else {
+            info!("✓ Final snapshot saved at slot {}", current_slot);
+        }
     } else {
-        info!("✓ Final snapshot saved at slot {}", current_slot);
+        info!("🔄 Restarting - skipping final save to preserve rewound tip");
     }
 
     result
@@ -569,6 +602,11 @@ async fn main() -> anyhow::Result<()> {
     for address in &config.addresses {
         info!("Loading address: {}", address);
         indexer.add_address(address.clone()).await?;
+        // Debug: show the address bytes that will be stored
+        use pallas_addresses::Address;
+        if let Ok(addr) = Address::from_bech32(address) {
+            info!("  Address bytes: {}", hex::encode(addr.to_vec()));
+        }
     }
 
     info!("Loaded {} address(es)", config.addresses.len());
@@ -592,9 +630,27 @@ async fn main() -> anyhow::Result<()> {
         });
 
         // Run chain sync in main task (this will block)
-        run_chain_sync(indexer, network, socket_path.clone(), config.tokens.clone()).await?;
-
-        return Ok(());
+        // Wrap in loop to handle restarts from AddAddressAndRollback
+        loop {
+            match run_chain_sync(indexer.clone(), network.clone(), socket_path.clone(), config.tokens.clone()).await {
+                Ok(()) => {
+                    // Normal shutdown
+                    return Ok(());
+                }
+                Err(e) => {
+                    // Check if this is a restart signal
+                    if let Some(slot_str) = e.to_string().strip_prefix("RESTART:") {
+                        if let Ok(_slot) = slot_str.parse::<u64>() {
+                            info!("🔄 Restarting chain sync to replay from rewound position...");
+                            // Loop will restart run_chain_sync, which will read the new tip from storage
+                            continue;
+                        }
+                    }
+                    // Real error - propagate it
+                    return Err(e);
+                }
+            }
+        }
     }
 
     // No socket provided - run in API-only mode

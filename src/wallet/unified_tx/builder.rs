@@ -888,8 +888,7 @@ impl UnifiedTxBuilder {
         change_assets: &BTreeMap<String, u64>,
         fee: u64,
     ) -> Result<(Vec<u8>, Vec<u8>, u64)> {
-        use crate::wallet::tx_builder::PlutusTransactionBuilder;
-        use crate::wallet::tx_builder::{PlutusInput, PlutusOutput};
+        use crate::wallet::tx_builder::{PlutusTransactionBuilder, PlutusInput, PlutusOutput};
         use crate::wallet::plutus::Network as PlutusNetwork;
 
         let network = match self.network {
@@ -1141,7 +1140,7 @@ impl UnifiedTxBuilder {
     ///
     /// # Arguments
     /// * `additional_keys` - Optional additional signing keys (e.g., for native script minting)
-    pub async fn build_and_sign_with_keys(&mut self, additional_keys: Vec<pallas_wallet::PrivateKey>) -> Result<Vec<u8>> {
+    pub async fn build_and_sign_with_keys(&mut self, additional_keys: Vec<pallas_crypto::key::ed25519::SecretKeyExtended>) -> Result<Vec<u8>> {
         let built_tx = self.build().await?;
 
         tracing::debug!("Determining which address indices were used");

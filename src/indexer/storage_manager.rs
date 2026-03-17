@@ -223,6 +223,19 @@ pub enum StorageCommand {
         response: oneshot::Sender<Result<()>>,
     },
 
+    /// Rollback to a specific slot for testing
+    RollbackToSlot {
+        target_slot: u64,
+        response: oneshot::Sender<Result<u64>>,  // Returns actual slot rolled back to
+    },
+
+    /// Rollback to a specific slot with known hash
+    RollbackToSlotWithHash {
+        target_slot: u64,
+        hash: Vec<u8>,
+        response: oneshot::Sender<Result<u64>>,
+    },
+
     /// Shutdown the storage manager
     Shutdown {
         response: oneshot::Sender<()>,
@@ -468,6 +481,30 @@ impl StorageHandle {
     pub async fn cleanup_snapshots(&self, keep_latest: Option<usize>) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.sender.send(StorageCommand::CleanupSnapshots { keep_latest, response: tx })?;
+        rx.await?
+    }
+
+    /// Rollback to a specific slot (for testing)
+    ///
+    /// This loads a snapshot at or before the target slot and resets the chain tip.
+    /// Returns the actual slot that was rolled back to.
+    pub async fn rollback_to_slot(&self, target_slot: u64) -> Result<u64> {
+        let (tx, rx) = oneshot::channel();
+        self.sender.send(StorageCommand::RollbackToSlot { target_slot, response: tx })?;
+        rx.await?
+    }
+
+    /// Rollback to a specific slot with a known block hash
+    ///
+    /// This allows proper chain sync intersection by providing the actual block hash.
+    /// Returns the actual slot that was rolled back to.
+    pub async fn rollback_to_slot_with_hash(&self, target_slot: u64, hash: &[u8]) -> Result<u64> {
+        let (tx, rx) = oneshot::channel();
+        self.sender.send(StorageCommand::RollbackToSlotWithHash {
+            target_slot,
+            hash: hash.to_vec(),
+            response: tx
+        })?;
         rx.await?
     }
 
@@ -815,6 +852,61 @@ impl StorageManager {
                 } else {
                     Err(anyhow::anyhow!("Storage not available"))
                 };
+                let _ = response.send(result);
+            }
+
+            StorageCommand::RollbackToSlot { target_slot, response } => {
+                tracing::info!("Rewinding chain sync to slot {} to replay blocks", target_slot);
+
+                let result = if let Some(ref mut storage) = self.storage {
+                    // Rewind the chain tip to the target slot
+                    // Note: We store with empty hash, which tells chain sync to find intersection at this slot
+                    match storage.store_chain_tip(target_slot, &[], 0) {
+                        Ok(_) => {
+                            if target_slot == 0 {
+                                tracing::info!("✅ Chain tip rewound to genesis (slot 0)");
+                            } else {
+                                tracing::info!("✅ Chain tip rewound to slot {}, chain sync will find intersection", target_slot);
+                            }
+                            Ok(target_slot)
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to rewind chain tip: {}", e);
+                            Err(e)
+                        }
+                    }
+                } else {
+                    Err(anyhow::anyhow!("Storage not available"))
+                };
+
+                let _ = response.send(result);
+            }
+
+            StorageCommand::RollbackToSlotWithHash { target_slot, hash, response } => {
+                tracing::info!("Rewinding chain sync to slot {} with hash {} to replay blocks",
+                             target_slot, hex::encode(&hash));
+
+                let result = if let Some(ref mut storage) = self.storage {
+                    // Rewind the chain tip to the target slot with the actual block hash
+                    match storage.store_chain_tip(target_slot, &hash, 0) {
+                        Ok(_) => {
+                            if target_slot == 0 {
+                                tracing::info!("✅ Chain tip rewound to genesis (slot 0)");
+                            } else {
+                                tracing::info!("✅ Chain tip rewound to slot {} with hash {}",
+                                             target_slot, hex::encode(&hash));
+                            }
+                            Ok(target_slot)
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to rewind chain tip: {}", e);
+                            Err(e)
+                        }
+                    }
+                } else {
+                    Err(anyhow::anyhow!("Storage not available"))
+                };
+
                 let _ = response.send(result);
             }
 

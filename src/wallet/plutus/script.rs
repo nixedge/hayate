@@ -32,8 +32,13 @@ impl PlutusScript {
             ));
         }
 
-        // Calculate and cache the script hash
-        let hash = address::script_hash(&cbor);
+        // Calculate and cache the script hash using version-tagged hash
+        let version_tag = match version {
+            PlutusVersion::V1 => 1,
+            PlutusVersion::V2 => 2,
+            PlutusVersion::V3 => 3,
+        };
+        let hash = address::script_hash_versioned(&cbor, version_tag);
 
         Ok(Self {
             version,
@@ -69,7 +74,11 @@ impl PlutusScript {
 
     /// Get the script address for a given network
     pub fn address(&self, network: Network) -> PlutusResult<Vec<u8>> {
-        address::script_address(&self.cbor, network)
+        // Use the cached hash (which is version-tagged) instead of recalculating
+        let mut addr = Vec::with_capacity(29);
+        addr.push(network.to_header_byte());
+        addr.extend_from_slice(&self.hash);
+        Ok(addr)
     }
 
     /// Get the policy ID (same as hash)
@@ -107,7 +116,18 @@ impl PlutusScript {
 
     /// Verify the script hash matches
     pub fn verify_hash(&self, expected_hash: &[u8]) -> bool {
-        address::verify_script_hash(&self.cbor, expected_hash)
+        if expected_hash.len() != 28 {
+            return false;
+        }
+
+        // Compute version-tagged hash to match how the hash is cached
+        let version_tag = match self.version {
+            PlutusVersion::V1 => 1,
+            PlutusVersion::V2 => 2,
+            PlutusVersion::V3 => 3,
+        };
+        let actual_hash = address::script_hash_versioned(&self.cbor, version_tag);
+        actual_hash.as_slice() == expected_hash
     }
 }
 
@@ -150,8 +170,8 @@ mod tests {
         let hash2 = script.hash();
         assert_eq!(hash1, hash2);
 
-        // Should match direct calculation
-        let expected = address::script_hash(&cbor);
+        // Should match direct calculation with version tag
+        let expected = address::script_hash_versioned(&cbor, 2);
         assert_eq!(hash1, &expected);
     }
 

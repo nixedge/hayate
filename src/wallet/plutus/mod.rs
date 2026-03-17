@@ -12,7 +12,7 @@ pub mod script;
 
 // Re-export commonly used types
 pub use address::Network;
-pub use cost_models::default_cost_model;
+pub use cost_models::{default_cost_model, plutus_v1_cost_model, plutus_v2_cost_model, plutus_v3_cost_model};
 #[allow(unused_imports)]
 pub use datum::{DatumOption, GovernanceMember, VersionedMultisig};
 #[allow(unused_imports)]
@@ -68,7 +68,7 @@ pub type PlutusResult<T> = Result<T, PlutusError>;
 /// # Returns
 /// A new PlutusScript with parameters applied
 pub fn apply_params_to_script(script: &PlutusScript, params: &[Vec<u8>]) -> PlutusResult<PlutusScript> {
-    use minicbor::{Encoder, Decoder};
+    use pallas_codec::minicbor::{Encoder, Decoder};
 
     // Scripts are double-encoded: outer CBOR byte string wrapping inner script
     // First, decode the outer layer to get the inner script bytes

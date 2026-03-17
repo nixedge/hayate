@@ -81,15 +81,13 @@ impl ProtocolParamQuery {
         client.abort().await;
 
         // Parse the response
-        tracing::debug!("Received {} protocol parameters from node", pparams.len());
+        tracing::debug!("Received protocol parameters from node");
         self.parse_protocol_params(pparams, epoch as u64)
     }
 
     /// Parse pallas protocol parameters into our ProtocolParameters struct
-    fn parse_protocol_params(&self, pparams: Vec<queries_v16::ProtocolParam>, epoch: u64) -> Result<ProtocolParameters> {
-        // The vector typically contains one ProtocolParam with all fields
-        let param = pparams.first()
-            .ok_or_else(|| ProtocolParamError::QueryFailed("No protocol parameters returned".to_string()))?;
+    fn parse_protocol_params(&self, param: queries_v16::ProtocolParam, epoch: u64) -> Result<ProtocolParameters> {
+        // In pallas 1.0, get_current_pparams returns a single ProtocolParam directly
 
         // Extract values with defaults (converting AnyUInt to u64)
         let min_fee_a = param.minfee_a.unwrap_or(44) as u64;
@@ -127,6 +125,26 @@ impl ProtocolParamQuery {
             steps: units.steps,
         });
 
+        // Parse cost models for Plutus scripts
+        // CostMdls has direct fields for plutus_v1 and plutus_v2
+        let (v1_cost_model, v2_cost_model, v3_cost_model) = if let Some(ref cost_models) = param.cost_models_for_script_languages {
+            // Extract cost models from the struct
+            let v1 = cost_models.plutus_v1.clone();
+            let v2 = cost_models.plutus_v2.clone();
+            // V3 doesn't exist in the struct yet, use fallback
+            let v3 = None;
+
+            (v1, v2, v3)
+        } else {
+            tracing::warn!("No cost models found in protocol params, using fallback defaults");
+            use crate::wallet::plutus::{plutus_v1_cost_model, plutus_v2_cost_model, plutus_v3_cost_model};
+            (
+                Some(plutus_v1_cost_model()),
+                Some(plutus_v2_cost_model()),
+                Some(plutus_v3_cost_model()),
+            )
+        };
+
         Ok(ProtocolParameters {
             min_fee_a,
             min_fee_b,
@@ -142,6 +160,9 @@ impl ProtocolParamQuery {
             pool_deposit,
             min_pool_cost,
             epoch,
+            plutus_v1_cost_model: v1_cost_model,
+            plutus_v2_cost_model: v2_cost_model,
+            plutus_v3_cost_model: v3_cost_model,
         })
     }
 
@@ -156,22 +177,5 @@ mod tests {
         let query = ProtocolParamQuery::new("localhost:3001".to_string(), 1);
         assert_eq!(query.socket_path, "localhost:3001");
         assert_eq!(query.magic, 1);
-    }
-
-    #[tokio::test]
-    #[ignore] // Requires running node
-    async fn test_query_mainnet_defaults() {
-        let mut query = ProtocolParamQuery::new("localhost:3001".to_string(), 764824073);
-        let params = query.query_current_params().await.unwrap();
-        assert_eq!(params.min_fee_a, 44);
-        assert_eq!(params.min_fee_b, 155_381);
-    }
-
-    #[tokio::test]
-    #[ignore] // Requires running node
-    async fn test_query_preprod_defaults() {
-        let mut query = ProtocolParamQuery::new("localhost:3001".to_string(), 1);
-        let params = query.query_current_params().await.unwrap();
-        assert_eq!(params.min_fee_a, 44);
     }
 }

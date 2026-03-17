@@ -34,14 +34,13 @@ pub async fn start_utxorpc_server(
 
     let magic = network.magic();
 
-    // Create query service with socket path if available
-    let query_service = if let Some(socket) = socket_path {
-        tracing::info!("Query service configured with node socket: {}", socket);
-        query::QueryServiceImpl::new_with_node(storage_handle, socket, magic)
-    } else {
-        tracing::warn!("Query service started without node socket - GetBlockByHash will not work");
-        query::QueryServiceImpl::new(storage_handle)
-    };
+    // Create query service with socket path and indexer
+    let query_service = query::QueryServiceImpl::new_with_indexer(
+        storage_handle,
+        socket_path,
+        magic,
+        indexer.clone()
+    );
 
     // Parse bind address
     let addr = bind_addr.parse()?;

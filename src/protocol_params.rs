@@ -104,6 +104,19 @@ pub struct ProtocolParameters {
     // === Metadata ===
     /// Epoch these parameters are valid for
     pub epoch: u64,
+
+    // === Cost Models ===
+    /// Plutus V1 cost model (166 elements)
+    /// Required for script integrity hash calculation
+    pub plutus_v1_cost_model: Option<Vec<i64>>,
+
+    /// Plutus V2 cost model (175 elements)
+    /// Required for script integrity hash calculation
+    pub plutus_v2_cost_model: Option<Vec<i64>>,
+
+    /// Plutus V3 cost model (if available)
+    /// Required for script integrity hash calculation
+    pub plutus_v3_cost_model: Option<Vec<i64>>,
 }
 
 #[allow(dead_code)]
@@ -166,6 +179,8 @@ impl ProtocolParameters {
 
     /// Get default parameters for Cardano mainnet
     pub fn mainnet_defaults() -> Self {
+        use crate::wallet::plutus::{plutus_v1_cost_model, plutus_v2_cost_model, plutus_v3_cost_model};
+
         Self {
             min_fee_a: 44,
             min_fee_b: 155_381,
@@ -187,11 +202,16 @@ impl ProtocolParameters {
             pool_deposit: 500_000_000,
             min_pool_cost: 340_000_000,
             epoch: 0,
+            plutus_v1_cost_model: Some(plutus_v1_cost_model()),
+            plutus_v2_cost_model: Some(plutus_v2_cost_model()),
+            plutus_v3_cost_model: Some(plutus_v3_cost_model()),
         }
     }
 
     /// Get default parameters for Preprod testnet
     pub fn preprod_defaults() -> Self {
+        use crate::wallet::plutus::{plutus_v1_cost_model, plutus_v2_cost_model, plutus_v3_cost_model};
+
         Self {
             min_fee_a: 44,
             min_fee_b: 155_381,
@@ -213,11 +233,16 @@ impl ProtocolParameters {
             pool_deposit: 500_000_000,
             min_pool_cost: 340_000_000,
             epoch: 0,
+            plutus_v1_cost_model: Some(plutus_v1_cost_model()),
+            plutus_v2_cost_model: Some(plutus_v2_cost_model()),
+            plutus_v3_cost_model: Some(plutus_v3_cost_model()),
         }
     }
 
     /// Get default parameters for Preview testnet
     pub fn preview_defaults() -> Self {
+        use crate::wallet::plutus::{plutus_v1_cost_model, plutus_v2_cost_model, plutus_v3_cost_model};
+
         Self {
             min_fee_a: 44,
             min_fee_b: 155_381,
@@ -239,11 +264,16 @@ impl ProtocolParameters {
             pool_deposit: 500_000_000,
             min_pool_cost: 340_000_000,
             epoch: 0,
+            plutus_v1_cost_model: Some(plutus_v1_cost_model()),
+            plutus_v2_cost_model: Some(plutus_v2_cost_model()),
+            plutus_v3_cost_model: Some(plutus_v3_cost_model()),
         }
     }
 
     /// Get default parameters for SanchoNet testnet
     pub fn sanchonet_defaults() -> Self {
+        use crate::wallet::plutus::{plutus_v1_cost_model, plutus_v2_cost_model, plutus_v3_cost_model};
+
         Self {
             min_fee_a: 44,
             min_fee_b: 155_381,
@@ -265,6 +295,9 @@ impl ProtocolParameters {
             pool_deposit: 500_000_000,
             min_pool_cost: 340_000_000,
             epoch: 0,
+            plutus_v1_cost_model: Some(plutus_v1_cost_model()),
+            plutus_v2_cost_model: Some(plutus_v2_cost_model()),
+            plutus_v3_cost_model: Some(plutus_v3_cost_model()),
         }
     }
 

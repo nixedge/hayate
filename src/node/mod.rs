@@ -5,4 +5,3 @@ pub mod protocol_query;
 pub mod txsubmit;
 
 pub use protocol_query::ProtocolParamQuery;
-pub use txsubmit::submit_tx;

@@ -20,14 +20,14 @@ use submit::{
 
 pub struct SubmitServiceImpl {
     _indexer: Arc<HayateIndexer>,
-    config: Arc<HayateConfig>,
+    _config: Arc<HayateConfig>,
 }
 
 impl SubmitServiceImpl {
     pub fn new(indexer: Arc<HayateIndexer>, config: Arc<HayateConfig>) -> Self {
         Self {
             _indexer: indexer,
-            config,
+            _config: config,
         }
     }
 }

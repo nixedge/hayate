@@ -2,7 +2,6 @@
 // TODO: Implement proper submission using pallas or cardano-cli
 
 use anyhow::{Context, Result};
-use std::path::Path;
 use tokio::process::Command;
 
 /// Submit a transaction to the Cardano node using cardano-cli
@@ -25,17 +24,30 @@ pub async fn submit_tx(socket_path: &str, _magic: u64, tx_bytes: Vec<u8>) -> Res
     let tx_hash = Hasher::<256>::hash(&tx_bytes);
     tracing::info!("Transaction hash: {}", hex::encode(&tx_hash));
 
-    // Write transaction to temporary file
+    // Write transaction to temporary file in TextEnvelope format
     let tx_file = format!("/tmp/hayate-tx-{}.signed", hex::encode(&tx_hash));
-    tokio::fs::write(&tx_file, &tx_bytes).await
+
+    // Create TextEnvelope JSON format that cardano-cli expects
+    let text_envelope = serde_json::json!({
+        "type": "Tx ConwayEra",
+        "description": "Ledger Cddl Format",
+        "cborHex": hex::encode(&tx_bytes)
+    });
+
+    let json_content = serde_json::to_string_pretty(&text_envelope)
+        .context("Failed to serialize TextEnvelope")?;
+
+    tokio::fs::write(&tx_file, json_content).await
         .context("Failed to write transaction file")?;
 
     // Submit using cardano-cli
-    let output = Command::new("cardano-cli")
+    let cardano_cli = "/nix/store/k32k1pvbal5xgl6ll88jjrcbx3vahzb5-cardano-cli-exe-cardano-cli-10.15.0.0/bin/cardano-cli";
+    let output = Command::new(cardano_cli)
         .args(&[
-            "transaction", "submit",
+            "conway", "transaction", "submit",
             "--tx-file", &tx_file,
             "--socket-path", socket_path,
+            "--testnet-magic", "4",
         ])
         .output()
         .await

@@ -103,8 +103,13 @@ impl Redeemer {
     }
 
     /// Create an empty redeemer (unit value in Plutus)
+    ///
+    /// This creates a redeemer with constructor 0 and no fields,
+    /// encoded as CBOR d87980 (Constr 0 [])
     pub fn empty(tag: RedeemerTag, index: u32) -> Self {
-        Self::new(tag, index, vec![], ExUnits::default())
+        // Unit/empty redeemer: Constr 0 [] = d87980 in CBOR
+        let unit_data = hex::decode("d87980").expect("valid hex");
+        Self::new(tag, index, unit_data, ExUnits::default())
     }
 
     /// Set custom execution units
@@ -204,7 +209,8 @@ mod tests {
 
         assert_eq!(redeemer.tag, RedeemerTag::Spend);
         assert_eq!(redeemer.index, 0);
-        assert!(redeemer.data.is_empty());
+        // Empty redeemer has unit data (Constr 0 []) encoded as CBOR d87980
+        assert_eq!(redeemer.data, hex::decode("d87980").unwrap());
     }
 
     #[test]

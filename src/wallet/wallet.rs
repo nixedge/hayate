@@ -164,18 +164,47 @@ impl Wallet {
         &self.root_key
     }
 
-    /// Get the payment key at given index as pallas_wallet::PrivateKey for signing
+    /// Get the payment key hash for a given address index
     ///
-    /// This is useful for transaction signing with pallas-txbuilder
-    pub fn payment_signing_key(&self, address_index: u32) -> DerivationResult<pallas_wallet::PrivateKey> {
+    /// This computes the BLAKE2b-224 hash of the 32-byte Ed25519 public key
+    /// (without chain code), which is used in Cardano addresses and transaction
+    /// signing requirements.
+    ///
+    /// # Returns
+    /// A 28-byte hash of the public key, as used in Cardano key hashes
+    pub fn payment_key_hash(&self, address_index: u32) -> DerivationResult<[u8; 28]> {
+        use pallas_crypto::key::ed25519::PublicKey;
+        use pallas_traverse::ComputeHash;
+
+        // Derive payment key at the given index
+        let payment_key = self.payment_key(address_index)?;
+
+        // Extract just the 32-byte public key (without chain code)
+        let payment_xpub = payment_key.public();
+        let pubkey_bytes = payment_xpub.public_key(); // [u8; 32]
+
+        // Create pallas PublicKey and compute BLAKE2b-224 hash
+        let public_key = PublicKey::from(pubkey_bytes);
+        let hash = public_key.compute_hash();
+
+        // Convert Hash<28> to [u8; 28]
+        let mut result = [0u8; 28];
+        result.copy_from_slice(hash.as_ref());
+        Ok(result)
+    }
+
+    /// Get the payment key at given index as pallas SecretKeyExtended for signing
+    ///
+    /// This is useful for transaction signing
+    pub fn payment_signing_key(&self, address_index: u32) -> DerivationResult<pallas_crypto::key::ed25519::SecretKeyExtended> {
         let payment_key = self.payment_key(address_index)?;
         xprv_to_pallas_privatekey(&payment_key)
     }
 }
 
-/// Convert ed25519_bip32::XPrv to pallas_wallet::PrivateKey
+/// Convert ed25519_bip32::XPrv to pallas SecretKeyExtended
 #[allow(dead_code)]
-fn xprv_to_pallas_privatekey(xprv: &XPrv) -> DerivationResult<pallas_wallet::PrivateKey> {
+fn xprv_to_pallas_privatekey(xprv: &XPrv) -> DerivationResult<pallas_crypto::key::ed25519::SecretKeyExtended> {
     // XPrv has a method to get just the 64-byte extended secret key (without chain code)
     let extended_secret_key_bytes = xprv.extended_secret_key();
 
@@ -185,13 +214,14 @@ fn xprv_to_pallas_privatekey(xprv: &XPrv) -> DerivationResult<pallas_wallet::Pri
         SecretKeyExtended::from_bytes_unchecked(extended_secret_key_bytes)
     };
 
-    Ok(pallas_wallet::PrivateKey::Extended(secret_key_extended))
+    // TODO: pallas_wallet removed in pallas 1.0 - return SecretKeyExtended directly
+    Ok(secret_key_extended)
 }
 
-/// Convert Ed25519 secret key bytes to pallas_wallet::PrivateKey
+/// Convert Ed25519 secret key bytes to pallas SecretKey
 ///
 /// This is useful for signing with temporary keys (e.g., for NFT minting)
-pub fn ed25519_secret_to_privatekey(secret_bytes: &[u8]) -> derivation::DerivationResult<pallas_wallet::PrivateKey> {
+pub fn ed25519_secret_to_privatekey(secret_bytes: &[u8]) -> derivation::DerivationResult<pallas_crypto::key::ed25519::SecretKey> {
     if secret_bytes.len() != 32 {
         return Err(derivation::DerivationError::DerivationFailed(format!(
             "Expected 32 bytes for Ed25519 secret key, got {}",
@@ -207,7 +237,8 @@ pub fn ed25519_secret_to_privatekey(secret_bytes: &[u8]) -> derivation::Derivati
     use pallas_crypto::key::ed25519::SecretKey;
     let secret_key = SecretKey::from(bytes);
 
-    Ok(pallas_wallet::PrivateKey::Normal(secret_key))
+    // TODO: pallas_wallet removed in pallas 1.0 - return SecretKey directly
+    Ok(secret_key)
 }
 
 #[cfg(test)]

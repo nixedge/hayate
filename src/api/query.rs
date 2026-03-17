@@ -2,6 +2,7 @@
 
 use tonic::{Request, Response, Status};
 use crate::indexer::{StorageHandle, ChainTip};
+use std::sync::Arc;
 
 // Include generated proto code
 #[allow(clippy::module_inception)]
@@ -24,6 +25,7 @@ pub struct QueryServiceImpl {
     storage: StorageHandle,
     socket_path: Option<String>,
     magic: u64,
+    indexer: Option<Arc<crate::indexer::HayateIndexer>>,
 }
 
 /// Helper function to format address as bech32 for logging
@@ -47,6 +49,7 @@ impl QueryServiceImpl {
             storage,
             socket_path: None,
             magic: 0,
+            indexer: None,
         }
     }
 
@@ -55,6 +58,21 @@ impl QueryServiceImpl {
             storage,
             socket_path: Some(socket_path),
             magic,
+            indexer: None,
+        }
+    }
+
+    pub fn new_with_indexer(
+        storage: StorageHandle,
+        socket_path: Option<String>,
+        magic: u64,
+        indexer: Arc<crate::indexer::HayateIndexer>
+    ) -> Self {
+        Self {
+            storage,
+            socket_path,
+            magic,
+            indexer: Some(indexer),
         }
     }
 }
@@ -430,6 +448,9 @@ impl QueryService for QueryServiceImpl {
                         pool_deposit: params.pool_deposit,
                         min_pool_cost: params.min_pool_cost,
                         epoch: params.epoch,
+                        plutus_v1_cost_model: params.plutus_v1_cost_model.unwrap_or_default(),
+                        plutus_v2_cost_model: params.plutus_v2_cost_model.unwrap_or_default(),
+                        plutus_v3_cost_model: params.plutus_v3_cost_model.unwrap_or_default(),
                     })
                 }
                 Err(e) => {
@@ -752,6 +773,160 @@ impl QueryService for QueryServiceImpl {
         sync.shutdown().await;
 
         result
+    }
+
+    async fn add_address_and_rollback(
+        &self,
+        request: Request<query::AddAddressAndRollbackRequest>,
+    ) -> Result<Response<query::AddAddressAndRollbackResponse>, Status> {
+        let req = request.into_inner();
+
+        tracing::info!("AddAddressAndRollback request: address={}, rollback_blocks={}",
+            req.address, req.rollback_blocks);
+
+        // Parse address - try bech32 first, then hex
+        let address_bytes = match pallas_addresses::Address::from_bech32(&req.address) {
+            Ok(addr) => addr.to_vec(),
+            Err(_) => {
+                // Try parsing as hex
+                match hex::decode(&req.address) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        return Ok(Response::new(query::AddAddressAndRollbackResponse {
+                            success: false,
+                            message: format!("Invalid address (not bech32 or hex): {}", e),
+                            rolled_back_to_slot: 0,
+                            blocks_rolled_back: 0,
+                        }));
+                    }
+                }
+            }
+        };
+
+        // Convert back to bech32 for tracking (for logging/debugging)
+        let _address_bech32 = match pallas_addresses::Address::from_bytes(&address_bytes) {
+            Ok(addr) => addr.to_bech32().unwrap_or_else(|_| hex::encode(&address_bytes)),
+            Err(_) => hex::encode(&address_bytes),
+        };
+
+        // Check if indexer is available
+        let indexer = match &self.indexer {
+            Some(idx) => idx,
+            None => {
+                return Ok(Response::new(query::AddAddressAndRollbackResponse {
+                    success: false,
+                    message: "Indexer not available for address tracking".to_string(),
+                    rolled_back_to_slot: 0,
+                    blocks_rolled_back: 0,
+                }));
+            }
+        };
+
+        // Add address to tracked addresses
+        tracing::info!("Adding address {} to tracked addresses", req.address);
+        if let Err(e) = indexer.add_address(req.address.clone()).await {
+            return Ok(Response::new(query::AddAddressAndRollbackResponse {
+                success: false,
+                message: format!("Failed to add address: {}", e),
+                rolled_back_to_slot: 0,
+                blocks_rolled_back: 0,
+            }));
+        }
+
+        // Get current chain tip
+        let tip = self.storage.get_chain_tip().await
+            .map_err(|e| Status::internal(format!("Failed to get chain tip: {}", e)))?;
+
+        let current_slot = tip.map(|t| t.slot).unwrap_or(0);
+
+        // Determine target (slot, hash) based on rollback_blocks:
+        // - 0 = resync from genesis (slot 0, empty hash)
+        // - N > 0 = walk back N blocks using prev_hash chain
+        let (target_slot, target_hash, rollback_blocks) = if req.rollback_blocks == 0 {
+            tracing::info!("Resyncing from genesis (rollback_blocks=0)");
+            (0u64, vec![], current_slot / 20) // Genesis, calculate total blocks
+        } else {
+            // Walk back N blocks using the node to get exact slot and hash
+            let socket_path = match &self.socket_path {
+                Some(path) => std::path::PathBuf::from(path),
+                None => {
+                    return Ok(Response::new(query::AddAddressAndRollbackResponse {
+                        success: false,
+                        message: "Node connection not configured for rollback".to_string(),
+                        rolled_back_to_slot: 0,
+                        blocks_rolled_back: 0,
+                    }));
+                }
+            };
+
+            match crate::indexer::block_walker::walk_back_n_blocks(
+                &self.storage,
+                &socket_path,
+                self.magic,
+                req.rollback_blocks
+            ).await {
+                Ok((slot, hash)) => {
+                    tracing::info!("Walked back {} blocks to slot={}, hash={}",
+                                 req.rollback_blocks, slot, hex::encode(&hash));
+                    (slot, hash, req.rollback_blocks)
+                }
+                Err(e) => {
+                    tracing::error!("Failed to walk back {} blocks: {}", req.rollback_blocks, e);
+                    return Ok(Response::new(query::AddAddressAndRollbackResponse {
+                        success: false,
+                        message: format!("Failed to walk back blocks: {}", e),
+                        rolled_back_to_slot: 0,
+                        blocks_rolled_back: 0,
+                    }));
+                }
+            }
+        };
+
+        tracing::info!("Rewinding from slot {} to slot {} ({} blocks)",
+            current_slot, target_slot, rollback_blocks);
+
+        // Perform rollback via storage with the actual block hash
+        let actual_slot = match self.storage.rollback_to_slot_with_hash(target_slot, &target_hash).await {
+            Ok(slot) => {
+                tracing::info!("✅ Rolled back chain tip to slot {} with hash {}",
+                             slot, hex::encode(&target_hash));
+                slot
+            },
+            Err(e) => {
+                tracing::error!("Failed to rollback: {}", e);
+                return Ok(Response::new(query::AddAddressAndRollbackResponse {
+                    success: false,
+                    message: format!("Failed to rollback storage: {}", e),
+                    rolled_back_to_slot: 0,
+                    blocks_rolled_back: 0,
+                }));
+            }
+        };
+
+        // Also rewind wallet tips so chain sync resumes from the rewound position
+        let wallet_ids = indexer.account_xpubs.read().await.clone();
+        for wallet_id in &wallet_ids {
+            if let Err(e) = self.storage.store_wallet_tip(wallet_id.clone(), actual_slot, target_hash.clone(), 0).await {
+                tracing::warn!("Failed to rewind wallet tip for {}: {}", wallet_id, e);
+            }
+        }
+        tracing::info!("✅ Rewound {} wallet tips to slot {}", wallet_ids.len(), actual_slot);
+
+        // Signal chain sync to restart from the rewound position
+        indexer.signal_restart(actual_slot);
+
+        // Calculate actual blocks rolled back
+        let actual_blocks_rolled_back = (current_slot.saturating_sub(actual_slot)) / 20;
+
+        tracing::info!("✅ Address {} added and rolled back to slot {} ({} blocks). Indexer will resync automatically.",
+            req.address, actual_slot, actual_blocks_rolled_back);
+
+        Ok(Response::new(query::AddAddressAndRollbackResponse {
+            success: true,
+            message: format!("Address added and rolled back successfully. Indexer will resync {} blocks from slot {}", actual_blocks_rolled_back, actual_slot),
+            rolled_back_to_slot: actual_slot,
+            blocks_rolled_back: actual_blocks_rolled_back,
+        }))
     }
 }
 

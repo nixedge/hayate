@@ -20,9 +20,26 @@ pub type MnemonicResult<T> = Result<T, MnemonicError>;
 
 /// Generate a new random BIP39 mnemonic phrase
 pub fn generate_mnemonic(word_count: usize) -> MnemonicResult<String> {
-    use rand::rngs::OsRng;
+    use rand::Rng;
 
-    let mnemonic = Mnemonic::generate_in_with(&mut OsRng, Language::English, word_count)
+    // Map word count to entropy bytes
+    // 12 words = 16 bytes, 15 = 20, 18 = 24, 21 = 28, 24 = 32
+    let entropy_bytes = match word_count {
+        12 => 16,
+        15 => 20,
+        18 => 24,
+        21 => 28,
+        24 => 32,
+        _ => return Err(MnemonicError::InvalidWordCount(word_count)),
+    };
+
+    // Generate random entropy
+    let mut rng = rand::thread_rng();
+    let mut entropy = vec![0u8; entropy_bytes];
+    rng.fill(&mut entropy[..]);
+
+    // Create mnemonic from entropy
+    let mnemonic = Mnemonic::from_entropy_in(Language::English, &entropy)
         .map_err(|e| MnemonicError::GenerationFailed(e.to_string()))?;
 
     Ok(mnemonic.to_string())
