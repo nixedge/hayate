@@ -241,6 +241,34 @@ pub fn ed25519_secret_to_privatekey(secret_bytes: &[u8]) -> derivation::Derivati
     Ok(secret_key)
 }
 
+/// Convert Ed25519 secret key bytes to pallas SecretKeyExtended
+///
+/// This creates a 64-byte extended key by appending a zero chain code to the 32-byte secret.
+/// This is useful for transaction signing where SecretKeyExtended is required.
+pub fn ed25519_secret_to_extended_privatekey(secret_bytes: &[u8]) -> derivation::DerivationResult<pallas_crypto::key::ed25519::SecretKeyExtended> {
+    if secret_bytes.len() != 32 {
+        return Err(derivation::DerivationError::DerivationFailed(format!(
+            "Expected 32 bytes for Ed25519 secret key, got {}",
+            secret_bytes.len()
+        )));
+    }
+
+    // Create 64-byte extended key (32-byte secret + 32-byte zero chain code)
+    let mut extended_bytes = [0u8; 64];
+    extended_bytes[0..32].copy_from_slice(secret_bytes);
+    // Chain code remains zeros (bytes 32..64)
+
+    // Create pallas SecretKeyExtended
+    use pallas_crypto::key::ed25519::SecretKeyExtended;
+    let secret_key = SecretKeyExtended::from_bytes(extended_bytes)
+        .map_err(|e| derivation::DerivationError::DerivationFailed(format!(
+            "Failed to create SecretKeyExtended: {:?}",
+            e
+        )))?;
+
+    Ok(secret_key)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
