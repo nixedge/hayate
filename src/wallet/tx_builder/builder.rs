@@ -355,17 +355,97 @@ impl PlutusTransactionBuilder {
         Ok(self)
     }
 
-    /// Build the transaction
+    /// Build the transaction with canonical CBOR encoding.
     ///
-    /// Returns the transaction CBOR bytes and transaction hash
+    /// Returns (tx_bytes, tx_hash). The tx body map keys are sorted in ascending
+    /// order as required by hardware wallets (Keystone, Ledger, etc.).
     pub fn build(&self) -> TxBuilderResult<(Vec<u8>, Vec<u8>)> {
+        use pallas_codec::minicbor::Decoder;
+        use pallas_crypto::hash::Hasher;
+
         let built_tx = self
             .staging_tx
             .clone()
             .build_conway_raw()
             .map_err(|e| TxBuilderError::BuildError(e.to_string()))?;
 
-        Ok((built_tx.tx_bytes.0, built_tx.tx_hash.0.to_vec()))
+        let tx_cbor = &built_tx.tx_bytes.0;
+
+        // Decode the 4-element tx array, extracting each part as raw bytes.
+        let mut dec = Decoder::new(tx_cbor);
+        dec.array().map_err(|e| TxBuilderError::BuildError(format!("tx array: {}", e)))?;
+
+        let body_start = dec.position();
+        dec.skip().map_err(|e| TxBuilderError::BuildError(format!("body: {}", e)))?;
+        let body_bytes = &tx_cbor[body_start..dec.position()];
+
+        let ws_start = dec.position();
+        dec.skip().map_err(|e| TxBuilderError::BuildError(format!("witness set: {}", e)))?;
+        let ws_bytes = &tx_cbor[ws_start..dec.position()];
+
+        let valid_start = dec.position();
+        dec.skip().map_err(|e| TxBuilderError::BuildError(format!("valid: {}", e)))?;
+        let valid_bytes = &tx_cbor[valid_start..dec.position()];
+
+        let aux_start = dec.position();
+        let aux_bytes = if aux_start < tx_cbor.len() {
+            dec.skip().map_err(|e| TxBuilderError::BuildError(format!("aux: {}", e)))?;
+            &tx_cbor[aux_start..dec.position()]
+        } else {
+            &[]
+        };
+
+        // Sort tx body map keys numerically (canonical CBOR for integer-keyed maps).
+        let mut bdec = Decoder::new(body_bytes);
+        let n = bdec.map()
+            .map_err(|e| TxBuilderError::BuildError(format!("body map: {}", e)))?
+            .ok_or_else(|| TxBuilderError::BuildError("indefinite-length body map".into()))?;
+
+        let mut entries: Vec<(u64, &[u8])> = Vec::with_capacity(n as usize);
+        for _ in 0..n {
+            let key = bdec.u64().map_err(|e| TxBuilderError::BuildError(format!("body key: {}", e)))?;
+            let vs = bdec.position();
+            bdec.skip().map_err(|e| TxBuilderError::BuildError(format!("body val: {}", e)))?;
+            entries.push((key, &body_bytes[vs..bdec.position()]));
+        }
+        entries.sort_unstable_by_key(|(k, _)| *k);
+
+        let mut canonical_body = Vec::with_capacity(body_bytes.len());
+        let m = entries.len() as u64;
+        if m <= 23 {
+            canonical_body.push(0xa0 | m as u8);
+        } else {
+            canonical_body.push(0xb8);
+            canonical_body.push(m as u8);
+        }
+        for (key, val) in &entries {
+            if *key <= 23 {
+                canonical_body.push(*key as u8);
+            } else if *key <= 255 {
+                canonical_body.push(0x18);
+                canonical_body.push(*key as u8);
+            } else {
+                canonical_body.push(0x19);
+                canonical_body.push((*key >> 8) as u8);
+                canonical_body.push(*key as u8);
+            }
+            canonical_body.extend_from_slice(val);
+        }
+
+        let tx_hash: Hash<32> = Hasher::<256>::hash(&canonical_body);
+
+        let mut out = Vec::with_capacity(1 + canonical_body.len() + ws_bytes.len() + valid_bytes.len() + aux_bytes.len());
+        out.push(0x84); // array(4)
+        out.extend_from_slice(&canonical_body);
+        out.extend_from_slice(ws_bytes);
+        out.extend_from_slice(valid_bytes);
+        if aux_bytes.is_empty() {
+            out.push(0xf6); // null
+        } else {
+            out.extend_from_slice(aux_bytes);
+        }
+
+        Ok((out, tx_hash.as_ref().to_vec()))
     }
 
     /// Build and sign the transaction using Ed25519 extended secret keys
