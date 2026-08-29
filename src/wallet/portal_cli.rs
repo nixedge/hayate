@@ -237,7 +237,7 @@ fn build_tx_cbor(
             .context("Failed to add change output")?;
     }
     builder.add_native_script(native_script_cbor).context("Failed to add native script")?;
-    builder.set_fee(fee).set_network_id();
+    builder.set_fee(fee);
     if let Some(t) = ttl { builder.set_ttl(t); }
 
     let (tx_bytes, tx_hash) = builder.build().context("Failed to build transaction")?;
