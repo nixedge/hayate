@@ -41,8 +41,8 @@ pub async fn handle_portal_command(
         }
 
         PortalCommand::BuildTx {
-            utxos, to, amount, change, fee, policy_file, ttl, network, out,
-        } => handle_build_tx(utxos, to, *amount, change, *fee, policy_file, *ttl, network, out),
+            utxos, to, amount, change, fee, policy_file, ttl, network, no_tag_sets, out,
+        } => handle_build_tx(utxos, to, *amount, change, *fee, policy_file, *ttl, network, *no_tag_sets, out),
 
         PortalCommand::ProposeTx { tx_file, witness_file, wallet_id, description, creds } => {
             handle_propose_tx(tx_file, witness_file, wallet_id, description.as_deref(), creds).await
@@ -161,6 +161,7 @@ fn build_tx_cbor(
     policy_file: &str,
     ttl: Option<u64>,
     network_str: &str,
+    no_tag_sets: bool,
 ) -> Result<(Vec<u8>, Vec<u8>, serde_json::Value)> {
     let policy_json: serde_json::Value = {
         let text = std::fs::read_to_string(policy_file)
@@ -227,7 +228,11 @@ fn build_tx_cbor(
         _ => PlutusNetwork::Testnet,
     };
 
-    let mut builder = PlutusTransactionBuilder::new(network, change_bytes.clone());
+    let mut builder = if no_tag_sets {
+        PlutusTransactionBuilder::new(network, change_bytes.clone()).no_tag_sets()
+    } else {
+        PlutusTransactionBuilder::new(network, change_bytes.clone())
+    };
     for utxo in &utxo_inputs {
         builder.add_input(&PlutusInput::regular(utxo.clone())).context("Failed to add input")?;
     }
@@ -292,10 +297,11 @@ fn handle_build_tx(
     policy_file: &str,
     ttl: Option<u64>,
     network_str: &str,
+    no_tag_sets: bool,
     out_path: &str,
 ) -> Result<()> {
     let (tx_bytes, tx_hash, tx_json) =
-        build_tx_cbor(utxo_strs, to, amount, change_addr, fee, policy_file, ttl, network_str)?;
+        build_tx_cbor(utxo_strs, to, amount, change_addr, fee, policy_file, ttl, network_str, no_tag_sets)?;
 
     let tx_hash_hex = hex::encode(&tx_hash);
     let out = serde_json::json!({

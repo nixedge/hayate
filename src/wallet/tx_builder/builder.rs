@@ -75,6 +75,7 @@ pub struct PlutusTransactionBuilder {
     network: Network,
     staging_tx: StagingTransaction,
     _change_address: Vec<u8>,
+    strip_tag_sets: bool,
 }
 
 impl PlutusTransactionBuilder {
@@ -84,7 +85,16 @@ impl PlutusTransactionBuilder {
             network,
             staging_tx: StagingTransaction::new(),
             _change_address: change_address,
+            strip_tag_sets: false,
         }
+    }
+
+    /// Strip CBOR tag 258 from set-typed fields in the tx body.
+    /// Required for Ledger signing via Eternl, which passes tagCborSets:false
+    /// to the Ledger and hashes the body without the d90102 prefix.
+    pub fn no_tag_sets(mut self) -> Self {
+        self.strip_tag_sets = true;
+        self
     }
 
     /// Add a regular input (vkey witness)
@@ -429,6 +439,11 @@ impl PlutusTransactionBuilder {
                 canonical_body.push((*key >> 8) as u8);
                 canonical_body.push(*key as u8);
             }
+            let val = if self.strip_tag_sets && val.starts_with(&[0xd9, 0x01, 0x02]) {
+                &val[3..]
+            } else {
+                val
+            };
             canonical_body.extend_from_slice(val);
         }
 

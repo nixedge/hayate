@@ -636,6 +636,11 @@ pub enum PortalCommand {
         #[arg(long, default_value = "testnet")]
         network: String,
 
+        /// Strip CBOR tag 258 from set fields in the tx body.
+        /// Required for Ledger signing via Eternl (tagCborSets:false compatibility).
+        #[arg(long, default_value_t = false)]
+        no_tag_sets: bool,
+
         /// Output file for the unsigned transaction
         #[arg(long, default_value = "unsigned-tx.json")]
         out: String,
