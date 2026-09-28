@@ -7,6 +7,7 @@ use crate::wallet::{
     derivation::{Network, derive_payment_address},
     transaction::{TransactionBuilder, sign_transaction, write_tx_body, write_signed_tx},
     utxorpc_client::WalletUtxorpcClient,
+    multisig::{extract_tx_body, sign_multisig_tx, encode_key_witness, vkey_hash},
 };
 use crate::gpg::Gpg;
 use std::io::{self, Write};
@@ -92,9 +93,65 @@ pub async fn handle_wallet_command(
         WalletCommand::Multisig { multisig_cmd } => {
             crate::wallet::multisig_cli::handle_multisig_command(multisig_cmd, &storage).await?;
         }
+
+        WalletCommand::Treasury { treasury_cmd } => {
+            handle_treasury_command(treasury_cmd, &storage)?;
+        }
     }
 
     Ok(())
+}
+
+fn handle_treasury_command(
+    cmd: &crate::cli::TreasuryCommand,
+    storage: &WalletStorage,
+) -> Result<()> {
+    use crate::cli::TreasuryCommand;
+    use crate::wallet::treasury::cli as treasury_cli;
+    use crate::wallet::treasury::config::TreasuryConfig;
+
+    match cmd {
+        TreasuryCommand::Fund {
+            wallet, account, key_index, config, treasury_utxo, vendor_key_hash,
+            milestones, fee, collateral, network, ttl, out,
+        } => {
+            treasury_cli::handle_fund(
+                storage, wallet, *account, *key_index, config,
+                treasury_utxo, vendor_key_hash, milestones,
+                *fee, collateral, out, network, *ttl,
+            )
+        }
+
+        TreasuryCommand::BlockPayment {
+            wallet, account, key_index, config, vendor_utxo, datum,
+            pause_indices, resume_indices, fee, collateral, network, ttl, validity_start, out,
+        } => {
+            treasury_cli::handle_block_payment(
+                storage, wallet, *account, *key_index, config,
+                vendor_utxo, datum, pause_indices, resume_indices,
+                *fee, collateral, out, network, *ttl, *validity_start,
+            )
+        }
+
+        TreasuryCommand::Withdraw {
+            wallet, account, key_index, config, vendor_utxo, datum, recipient,
+            current_time_ms, fee, collateral, network, ttl, validity_start, out,
+        } => {
+            treasury_cli::handle_withdraw(
+                storage, wallet, *account, *key_index, config,
+                vendor_utxo, datum, recipient, *current_time_ms,
+                *fee, collateral, out, network, *ttl, *validity_start,
+            )
+        }
+
+        TreasuryCommand::GenerateConfig { out } => {
+            let template = TreasuryConfig::template();
+            template.save(out)?;
+            println!("Template treasury config saved to: {}", out);
+            println!("Edit the file with your deployed contract details.");
+            Ok(())
+        }
+    }
 }
 
 fn handle_init(
@@ -718,23 +775,73 @@ fn handle_sign_tx(
 }
 
 fn handle_witness_tx(
-    _storage: &WalletStorage,
-    _wallet: &str,
-    _account: u32,
-    _tx_body_file: &str,
-    _out_file: &str,
+    storage: &WalletStorage,
+    wallet: &str,
+    account: u32,
+    tx_body_file: &str,
+    out_file: &str,
     role: &str,
 ) -> Result<()> {
-    println!("📝 Creating witness for transaction...");
-
-    // Validate role
     if role != "payment" && role != "stake" {
         anyhow::bail!("Role must be 'payment' or 'stake'");
     }
 
-    println!("⚠️  witness-tx command requires witness set generation");
-    println!("   This will be fully implemented in the next phase");
-    println!("   For now, use sign-tx to create a fully signed transaction");
+    let contents = std::fs::read_to_string(tx_body_file)
+        .with_context(|| format!("Failed to read tx file: {}", tx_body_file))?;
+
+    let tx_body_cbor = if let Ok(envelope) = serde_json::from_str::<serde_json::Value>(&contents) {
+        let tx_type = envelope["type"].as_str().unwrap_or("");
+        let cbor_hex = if tx_type == "Tx ConwayEra" || tx_type == "TxBody ConwayEra" {
+            envelope["cborHex"]
+                .as_str()
+                .context("Missing 'cborHex' field in tx envelope")?
+                .to_string()
+        } else if let Some(h) = envelope["txCbor"].as_str() {
+            h.to_string()
+        } else {
+            anyhow::bail!(
+                "Unrecognised tx envelope type '{}': expected 'Tx ConwayEra' or 'TxBody ConwayEra'",
+                tx_type
+            );
+        };
+        let raw = hex::decode(cbor_hex.trim()).context("Failed to hex-decode tx CBOR")?;
+        extract_tx_body(&raw).context("Failed to extract tx body from CBOR")?
+    } else {
+        // Plain hex file (raw tx body)
+        let raw = hex::decode(contents.trim()).context("Failed to hex-decode tx body file")?;
+        extract_tx_body(&raw).context("Failed to extract tx body from CBOR")?
+    };
+
+    let account_keys = storage
+        .derive_account(wallet, account)
+        .with_context(|| format!("Failed to derive account {} from wallet '{}'", account, wallet))?;
+
+    let signing_key = if role == "stake" {
+        &account_keys.stake_key
+    } else {
+        &account_keys.payment_key
+    };
+
+    let (vkey_32, sig_64) = sign_multisig_tx(&tx_body_cbor, signing_key);
+    let witness_cbor = encode_key_witness(&vkey_32, &sig_64)
+        .context("Failed to encode key witness CBOR")?;
+
+    let witness_json = serde_json::json!({
+        "type": "TxWitness ConwayEra",
+        "description": "",
+        "cborHex": hex::encode(&witness_cbor),
+    });
+
+    std::fs::write(
+        out_file,
+        serde_json::to_string_pretty(&witness_json).unwrap(),
+    )
+    .with_context(|| format!("Failed to write witness to '{}'", out_file))?;
+
+    let key_hash = vkey_hash(&vkey_32.try_into().unwrap());
+    println!("Witness written to: {}", out_file);
+    println!("Key hash: {}", hex::encode(key_hash));
+    println!("Role: {}", role);
 
     Ok(())
 }

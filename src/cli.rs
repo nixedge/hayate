@@ -417,6 +417,12 @@ pub enum WalletCommand {
         #[command(subcommand)]
         multisig_cmd: MultisigCommand,
     },
+
+    /// SundaeSwap treasury contract operations (fund, block-payment, withdraw)
+    Treasury {
+        #[command(subcommand)]
+        treasury_cmd: TreasuryCommand,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -708,6 +714,188 @@ pub enum PortalCommand {
         no_broadcast: bool,
     },
 
+}
+
+#[derive(Subcommand, Debug)]
+pub enum TreasuryCommand {
+    /// Create a vendor contract: move ADA from the treasury to a new vendor UTxO with milestones.
+    /// Implements the Treasury::Fund redeemer. Requires the committee and vendor to sign.
+    Fund {
+        /// Local wallet name (committee member signing key)
+        #[arg(long)]
+        wallet: String,
+
+        /// Account index for key derivation
+        #[arg(long, default_value = "0")]
+        account: u32,
+
+        /// Key index within the account
+        #[arg(long, default_value = "0")]
+        key_index: u32,
+
+        /// Treasury config JSON file (registry token, script addresses, script CBOR)
+        #[arg(long)]
+        config: String,
+
+        /// Treasury script UTxO: "txhash#index:lovelace"
+        #[arg(long)]
+        treasury_utxo: String,
+
+        /// Vendor key hash (28 bytes, 56 hex chars) — identifies the vendor
+        #[arg(long)]
+        vendor_key_hash: String,
+
+        /// Milestone: "YYYY-MM-DD:lovelace" or "ISO8601:lovelace" (repeatable)
+        #[arg(long = "milestone", action = clap::ArgAction::Append, required = true)]
+        milestones: Vec<String>,
+
+        /// Transaction fee in lovelace
+        #[arg(long, default_value = "500000")]
+        fee: u64,
+
+        /// Collateral UTxO: "txhash#index:lovelace"
+        #[arg(long)]
+        collateral: String,
+
+        /// Network (mainnet, preprod, preview, sanchonet)
+        #[arg(long, default_value = "preprod")]
+        network: String,
+
+        /// TTL slot (optional)
+        #[arg(long)]
+        ttl: Option<u64>,
+
+        /// Output file for the unsigned transaction
+        #[arg(long, default_value = "fund-tx.json")]
+        out: String,
+    },
+
+    /// Pause or resume milestone payments on a vendor UTxO (Adjudicate redeemer).
+    /// Requires committee pause/resume permission.
+    BlockPayment {
+        /// Local wallet name (committee member signing key)
+        #[arg(long)]
+        wallet: String,
+
+        /// Account index for key derivation
+        #[arg(long, default_value = "0")]
+        account: u32,
+
+        /// Key index within the account
+        #[arg(long, default_value = "0")]
+        key_index: u32,
+
+        /// Treasury config JSON file
+        #[arg(long)]
+        config: String,
+
+        /// Vendor script UTxO: "txhash#index:lovelace"
+        #[arg(long)]
+        vendor_utxo: String,
+
+        /// Current vendor datum as CBOR hex (from the vendor UTxO)
+        #[arg(long)]
+        datum: String,
+
+        /// Payout index to PAUSE (0-based, repeatable)
+        #[arg(long = "pause", action = clap::ArgAction::Append)]
+        pause_indices: Vec<u32>,
+
+        /// Payout index to RESUME (0-based, repeatable)
+        #[arg(long = "resume", action = clap::ArgAction::Append)]
+        resume_indices: Vec<u32>,
+
+        /// Transaction fee in lovelace
+        #[arg(long, default_value = "500000")]
+        fee: u64,
+
+        /// Collateral UTxO: "txhash#index:lovelace"
+        #[arg(long)]
+        collateral: String,
+
+        /// Network (mainnet, preprod, preview, sanchonet)
+        #[arg(long, default_value = "preprod")]
+        network: String,
+
+        /// TTL slot (optional; if omitted and validity-start is set, defaults to start+129600)
+        #[arg(long)]
+        ttl: Option<u64>,
+
+        /// Validity start slot (required for Adjudicate — sets the 36-hour window)
+        #[arg(long)]
+        validity_start: Option<u64>,
+
+        /// Output file for the unsigned transaction
+        #[arg(long, default_value = "block-payment-tx.json")]
+        out: String,
+    },
+
+    /// Withdraw matured payouts from a vendor UTxO (Withdraw redeemer).
+    /// The vendor's key must sign. Matured active payouts are claimed.
+    Withdraw {
+        /// Local wallet name (vendor signing key)
+        #[arg(long)]
+        wallet: String,
+
+        /// Account index for key derivation
+        #[arg(long, default_value = "0")]
+        account: u32,
+
+        /// Key index within the account
+        #[arg(long, default_value = "0")]
+        key_index: u32,
+
+        /// Treasury config JSON file
+        #[arg(long)]
+        config: String,
+
+        /// Vendor script UTxO: "txhash#index:lovelace"
+        #[arg(long)]
+        vendor_utxo: String,
+
+        /// Current vendor datum as CBOR hex (from the vendor UTxO)
+        #[arg(long)]
+        datum: String,
+
+        /// Recipient address (bech32) for matured payout funds
+        #[arg(long)]
+        recipient: String,
+
+        /// Current POSIX time in milliseconds (used to determine matured payouts)
+        #[arg(long)]
+        current_time_ms: i64,
+
+        /// Transaction fee in lovelace
+        #[arg(long, default_value = "500000")]
+        fee: u64,
+
+        /// Collateral UTxO: "txhash#index:lovelace"
+        #[arg(long)]
+        collateral: String,
+
+        /// Network (mainnet, preprod, preview, sanchonet)
+        #[arg(long, default_value = "preprod")]
+        network: String,
+
+        /// TTL slot (optional)
+        #[arg(long)]
+        ttl: Option<u64>,
+
+        /// Validity start slot (optional)
+        #[arg(long)]
+        validity_start: Option<u64>,
+
+        /// Output file for the unsigned transaction
+        #[arg(long, default_value = "withdraw-tx.json")]
+        out: String,
+    },
+
+    /// Generate a template treasury config JSON file to fill in
+    GenerateConfig {
+        /// Output file path
+        #[arg(long, default_value = "treasury-config.json")]
+        out: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]

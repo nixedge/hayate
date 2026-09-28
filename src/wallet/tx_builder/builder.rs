@@ -365,6 +365,16 @@ impl PlutusTransactionBuilder {
         Ok(self)
     }
 
+    /// Add a required signer key hash (disclosed_signers / Conway tx body field 14).
+    ///
+    /// The transaction must be signed by the holder of this key.
+    /// Required by Plutus validators that check `must_be_signed_by`.
+    pub fn add_required_signer(&mut self, key_hash: [u8; 28]) -> TxBuilderResult<&mut Self> {
+        let hash = pallas_crypto::hash::Hash::from(key_hash);
+        self.staging_tx = self.staging_tx.clone().disclosed_signer(hash);
+        Ok(self)
+    }
+
     /// Build the transaction with canonical CBOR encoding.
     ///
     /// Returns (tx_bytes, tx_hash). The tx body map keys are sorted in ascending

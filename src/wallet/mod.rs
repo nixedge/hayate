@@ -21,6 +21,7 @@ pub mod multisig;
 pub mod multisig_cli;
 pub mod portal;
 pub mod portal_cli;
+pub mod treasury;
 #[cfg(test)]
 pub mod test_validators;
 
